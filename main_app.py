@@ -764,20 +764,3 @@ trx_inv_fb = trx_inv.merge(
     how="left"
 )
 
-
-
-
-# ---------------------------------------------------
-# Cálculo de Antigüedad de Revisión
-# ---------------------------------------------------
-trx_inv_fb["Fecha_Ultima_Revision"] = pd.to_datetime(trx_inv_fb["Ultima_Revision"], errors="coerce")
-trx_inv_fb["Antiguedad_Revision_Dias"] = (pd.Timestamp.today() - trx_inv_fb["Fecha_Ultima_Revision"]).dt.days
-
-# Fill NA para tickets y satisfacción
-trx_inv_fb["Ticket_Soporte_Abierto"] = trx_inv_fb["Ticket_Soporte_Abierto"].fillna(0)
-trx_inv_fb["Satisfaccion_NPS"] = trx_inv_fb["Satisfaccion_NPS"].fillna(0)
-
-# ---------------------------------------------------
-# Agrupar por Bodega
-# ---------------------------------------------------
-
