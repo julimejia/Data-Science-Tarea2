@@ -96,16 +96,75 @@ def run_healthcheck(df_raw, df_clean=None, required_cols=None):
     hc["rows"] = len(df_raw)
     hc["cols"] = len(df_raw.columns)
     # percent missing (rounded)
-    hc["missing_pct"] = (df_raw.isna().mean() * 100).round(2).to_dict()
+    missing_frac = df_raw.isna().mean()
+    hc["missing_pct"] = (missing_frac * 100).round(2).to_dict()
     hc["missing_count"] = df_raw.isna().sum().to_dict()
     hc["duplicates"] = int(df_raw.duplicated().sum())
     hc["dtypes"] = df_raw.dtypes.astype(str).to_dict()
     hc["sample_head"] = df_raw.head(5)
+
+    # Memory usage
+    try:
+        hc["memory_bytes"] = int(df_raw.memory_usage(deep=True).sum())
+    except Exception:
+        hc["memory_bytes"] = None
+
+    # Numeric summaries (min, max, mean, std, percent zeros)
+    numeric = df_raw.select_dtypes(include=["number"]).copy()
+    num_summary = {}
+    if not numeric.empty:
+        desc = numeric.describe().T
+        for col in desc.index:
+            vals = desc.loc[col]
+            zeros = int((numeric[col] == 0).sum())
+            num_summary[col] = {
+                "count": int(vals["count"]),
+                "mean": float(vals.get("mean", float("nan"))),
+                "std": float(vals.get("std", float("nan"))),
+                "min": float(vals.get("min", float("nan"))),
+                "max": float(vals.get("max", float("nan"))),
+                "pct_zeros": round(zeros / max(1, int(vals["count"])) * 100, 2)
+            }
+    hc["numeric_summary"] = num_summary
+
+    # Categorical summaries (unique count, top values)
+    cat = df_raw.select_dtypes(include=["object", "category"]).copy()
+    cat_summary = {}
+    if not cat.empty:
+        for col in cat.columns:
+            nunique = int(cat[col].nunique(dropna=True))
+            top = list(cat[col].value_counts(dropna=True).head(3).items())
+            cat_summary[col] = {"unique": nunique, "top_values": top}
+    hc["categorical_summary"] = cat_summary
+
+    # Date parse / NaT issues for datetime columns
+    date_issues = {}
+    for col in df_raw.columns:
+        if "datetime64" in str(df_raw[col].dtype) or "datetime" in col.lower():
+            nat_count = int(df_raw[col].isna().sum())
+            date_issues[col] = {"nat_count": nat_count, "pct_nat": round(nat_count / max(1, len(df_raw)) * 100, 2)}
+    hc["date_issues"] = date_issues
+
+    # Required columns
     missing_required = []
     if required_cols:
         missing_required = list(set(required_cols) - set(df_raw.columns))
     hc["missing_required_cols"] = missing_required
     hc["status"] = "ok" if not missing_required else "invalid_cols"
+
+    # Simple suggestions
+    suggestions = []
+    if hc["duplicates"] > 0:
+        suggestions.append("Remove or investigate duplicate rows")
+    high_missing = [k for k, v in hc["missing_pct"].items() if v > 30]
+    if high_missing:
+        suggestions.append(f"High missing (>30%) in: {high_missing}")
+    if any(v["unique"] == 0 for v in cat_summary.values() if isinstance(v, dict)):
+        suggestions.append("Categorical columns with no unique values detected")
+    if hc.get("memory_bytes") and hc["memory_bytes"] > 200_000_000:
+        suggestions.append("Large memory usage: consider downcasting types or sampling")
+
+    hc["suggestions"] = suggestions
     return hc
 
 health_status = {}
@@ -147,6 +206,11 @@ for col, (name, status) in zip(cols, health_status.items()):
             if health:
                 with st.expander("Detalles Healthcheck"):
                     st.markdown(f"- **Filas:** {health['rows']}  \n- **Columnas:** {health['cols']}  \n- **Duplicados:** {health['duplicates']}")
+                    # memory
+                    if health.get("memory_bytes") is not None:
+                        mb = round(health["memory_bytes"] / (1024 ** 2), 2)
+                        st.markdown(f"- **Memoria estimada:** {mb} MB")
+
                     # show top 5 missing columns by percent
                     missing_pct = {k: v for k, v in health["missing_pct"].items() if v > 0}
                     if missing_pct:
@@ -155,6 +219,34 @@ for col, (name, status) in zip(cols, health_status.items()):
                         st.table(pd.DataFrame(top5, columns=["Columna", "% Missing"]))
                     else:
                         st.info("No missing values detected")
+
+                    # numeric summary
+                    if health.get("numeric_summary"):
+                        st.markdown("**Resumen Numérico (selección)**")
+                        num_df = pd.DataFrame(health["numeric_summary"]).T
+                        st.dataframe(num_df.style.format({"mean": "{:.2f}", "std": "{:.2f}", "min": "{:.2f}", "max": "{:.2f}", "pct_zeros": "{:.2f}%"}), use_container_width=True)
+
+                    # categorical summary
+                    if health.get("categorical_summary"):
+                        st.markdown("**Resumen Categórico (top values)**")
+                        cat_rows = []
+                        for c, meta in health["categorical_summary"].items():
+                            tops = ", ".join([f"{v[0]} ({v[1]})" for v in meta["top_values"]]) if meta["top_values"] else ""
+                            cat_rows.append({"col": c, "unique": meta["unique"], "top": tops})
+                        st.table(pd.DataFrame(cat_rows))
+
+                    # date issues
+                    if health.get("date_issues"):
+                        di = {k: v for k, v in health["date_issues"].items() if v["nat_count"] > 0}
+                        if di:
+                            st.markdown("**Problemas de fecha (NaT)**")
+                            st.table(pd.DataFrame(di).T)
+
+                    # suggestions
+                    if health.get("suggestions"):
+                        st.markdown("**Sugerencias**")
+                        for s in health["suggestions"]:
+                            st.write(f"- {s}")
 
         elif status == "missing":
             st.warning(f"⚠️ {name}\nNo cargado")
