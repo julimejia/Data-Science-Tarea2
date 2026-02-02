@@ -348,3 +348,64 @@ if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" 
         """
     )
 
+# =============================================================================
+# ========================= FASE 2.1 – Variables Derivadas ===============================
+# =============================================================================
+# Unimos costo unitario desde inventario
+merged = merged.merge(
+    inv[["SKU_ID", "Costo_Unitario"]],
+    on="SKU_ID",
+    how="left"
+)
+
+merged["Costo_Unitario"] = merged["Costo_Unitario"].fillna(0)
+
+merged["costo_total"] = merged["Cantidad_Vendida"] * merged["Costo_Unitario"]
+merged["margen_utilidad"] = merged["ingreso"] - merged["costo_total"]
+
+merged["margen_pct"] = merged.apply(
+    lambda x: x["margen_utilidad"] / x["ingreso"] if x["ingreso"] > 0 else 0,
+    axis=1
+)
+
+merged["Fecha_Entrega_Prometida"] = pd.to_datetime(
+    merged["Fecha_Entrega_Prometida"], errors="coerce"
+)
+merged["Fecha_Entrega_Real"] = pd.to_datetime(
+    merged["Fecha_Entrega_Real"], errors="coerce"
+)
+
+merged["brecha_entrega_dias"] = (
+    merged["Fecha_Entrega_Real"] - merged["Fecha_Entrega_Prometida"]
+).dt.days
+
+# Asumimos columna Categoria y Ticket_Soporte (0/1)
+soporte_categoria = (
+    merged.groupby("Categoria")
+    .agg(
+        tickets_soporte=("Ticket_Soporte", "sum"),
+        transacciones=("SKU_ID", "count")
+    )
+    .reset_index()
+)
+
+soporte_categoria["ratio_soporte"] = (
+    soporte_categoria["tickets_soporte"] /
+    soporte_categoria["transacciones"]
+)
+
+merged["riesgo_operativo"] = (
+    (merged["sku_status"] == "FANTASMA") |
+    (merged["margen_utilidad"] < 0) |
+    (merged["brecha_entrega_dias"] > 3)
+).astype(int)
+
+merged["health_score_transaccion"] = 100
+
+merged.loc[merged["sku_status"] == "FANTASMA", "health_score_transaccion"] -= 40
+merged.loc[merged["margen_utilidad"] < 0, "health_score_transaccion"] -= 30
+merged.loc[merged["brecha_entrega_dias"] > 3, "health_score_transaccion"] -= 20
+
+merged["health_score_transaccion"] = merged["health_score_transaccion"].clip(0, 100)
+
+
