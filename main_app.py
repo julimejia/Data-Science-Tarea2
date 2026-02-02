@@ -525,81 +525,70 @@ st.pyplot(fig)
 
 # ---------- 5. Storytelling Riesgo Operativo Mejorado ----------
 # ===============================================================
-# 5️⃣ Storytelling de Riesgo Operativo
-# ===============================================================
-st.subheader("5️⃣ Storytelling de Riesgo Operativo (Visual Avanzado)")
+# ---------- 5️⃣ Storytelling de Riesgo Operativo ----------
+st.subheader("5️⃣ Storytelling de Riesgo Operativo (Antigüedad vs Tickets)")
 
-# -----------------------------------------
-# Preparar datos: Tickets por SKU y merge con inventario
-# -----------------------------------------
+# Agrupar tickets por SKU_ID y asociar con inventario
 tickets_sku = fb_sku.groupby("SKU_ID")["Ticket_Soporte_Abierto"].sum().reset_index()
 tickets_sku.columns = ["SKU_ID", "Tickets_Abiertos"]
 
-# Columnas necesarias del inventario
-inv_cols_needed = [c for c in ["SKU_ID", "Bodega_Origen", "Stock_Actual", "Ultima_Revision"] if c in inv.columns]
-df_riesgo_temp = tickets_sku.merge(inv[inv_cols_needed], on="SKU_ID", how="left")
+# Merge con inventario para obtener Bodega_Origen, Stock y Última Revisión
+df_riesgo = tickets_sku.merge(
+    inv[["SKU_ID","Bodega_Origen","Stock_Actual","Ultima_Revision"]],
+    on="SKU_ID",
+    how="left"
+)
 
-# Agrupar por Bodega_Origen
-df_riesgo = df_riesgo_temp.groupby("Bodega_Origen").agg(
-    Tickets_Abiertos=("Tickets_Abiertos", "sum"),
-    Stock_Total=("Stock_Actual", "sum"),
-    Ultima_Revision=("Ultima_Revision", "max")
-).reset_index()
+# Agrupar por Bodega
+df_riesgo = df_riesgo.groupby("Bodega_Origen").agg({
+    "Tickets_Abiertos":"sum",
+    "Stock_Actual":"sum",
+    "Ultima_Revision":"max"
+}).reset_index()
 
-# -----------------------------------------
-# Calcular días desde última revisión y riesgo
-# -----------------------------------------
+# Calcular días desde la última revisión
 df_riesgo["Ultima_Revision"] = pd.to_datetime(df_riesgo["Ultima_Revision"], errors="coerce")
-df_riesgo["Dias_Ultima_Revision"] = (pd.Timestamp.today() - df_riesgo["Ultima_Revision"]).dt.days.fillna(0).astype(int)
+df_riesgo["Dias_Ultima_Revision"] = (pd.Timestamp.today() - df_riesgo["Ultima_Revision"]).dt.days
+df_riesgo["Dias_Ultima_Revision"] = df_riesgo["Dias_Ultima_Revision"].fillna(0)
 
-# Riesgo = Tickets x (Días desde última revisión)
+# Calcular riesgo operativo como Tickets x Días desde Última Revisión
 df_riesgo["Riesgo"] = df_riesgo["Tickets_Abiertos"] * (df_riesgo["Dias_Ultima_Revision"] + 1)
 
-
-
-# -----------------------------------------
-# Visualización avanzada: Scatter plot
-# -----------------------------------------
-fig, ax = plt.subplots(figsize=(12,6))
+# Scatter plot visual storytelling
+fig, ax = plt.subplots(figsize=(10,6))
 
 scatter = ax.scatter(
     df_riesgo["Dias_Ultima_Revision"].values,
     df_riesgo["Tickets_Abiertos"].values,
-    s=(df_riesgo["Stock_Total"] / df_riesgo["Stock_Total"].max() * 500 + 50), 
-    c=df_riesgo["Riesgo"].values,
+    s=(df_riesgo["Stock_Actual"] / df_riesgo["Stock_Actual"].max() * 500 + 50),  # tamaño según stock
+    c=df_riesgo["Riesgo"].values,  # color según riesgo
     cmap="Reds",
     alpha=0.7,
+    edgecolors="black"
 )
 
-# Añadir etiquetas solo a las 5 bodegas más críticas (mayor riesgo)
-top_bodegas = df_riesgo.sort_values("Riesgo", ascending=False).head(5)
-for i, row in top_bodegas.iterrows():
+# Etiquetas de bodega
+for i, row in df_riesgo.iterrows():
     ax.text(
         row["Dias_Ultima_Revision"] + 0.5,
-        row["Tickets_Abiertos"] + 0.2,
-        str(row["Bodega_Origen"]),
-        fontsize=10,
-        fontweight="bold",
-        color="darkred"
+        row["Tickets_Abiertos"],
+        row["Bodega_Origen"],
+        fontsize=9
     )
 
 ax.set_xlabel("Días desde Última Revisión")
 ax.set_ylabel("Tickets de Soporte Abiertos")
-ax.set_title("Riesgo Operativo: Tickets vs Antigüedad de Revisión por Bodega\n(Tamaño del punto=Stock, Color=Riesgo)")
-
-# Colorbar
+ax.set_title("Riesgo Operativo por Bodega: Antigüedad vs Tickets (Tamaño=Stock, Color=Riesgo)")
 cbar = plt.colorbar(scatter)
 cbar.set_label("Riesgo Operativo (Tickets x Días)")
 
-fig.tight_layout()
 st.pyplot(fig)
 
-# -----------------------------------------
-# Tabla resumen de riesgo
-# -----------------------------------------
+# Tabla de riesgo ordenada
 st.dataframe(
     df_riesgo.sort_values("Riesgo", ascending=False)[
-        ["Bodega_Origen", "Dias_Ultima_Revision", "Tickets_Abiertos", "Stock_Total", "Riesgo"]
+        ["Bodega_Origen","Dias_Ultima_Revision","Tickets_Abiertos","Stock_Actual","Riesgo"]
     ]
 )
+
 
