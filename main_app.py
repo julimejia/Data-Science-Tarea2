@@ -524,12 +524,25 @@ ax.set_title("Paradoja Stock Alto vs Sentimiento Negativo")
 st.pyplot(fig)
 
 # ---------- 5. Storytelling Riesgo Operativo ----------
+# ---------- 5. Storytelling Riesgo Operativo ----------
 st.subheader("5️⃣ Storytelling de Riesgo Operativo")
-df_riesgo = inv.merge(fb_sku.groupby("Bodega_Origen")["Ticket_Soporte_Abierto"].sum().reset_index(), on="Bodega_Origen", how="left")
+
+# Merge Feedback + Inventario para asociar cada ticket con la Bodega
+fb_bodega = fb_sku.merge(inv[["SKU_ID", "Bodega_Origen"]], on="SKU_ID", how="left")
+
+# Agrupar tickets por Bodega
+tickets_bodega = fb_bodega.groupby("Bodega_Origen")["Ticket_Soporte_Abierto"].sum().reset_index()
+
+# Merge con inventario para obtener Última Revisión
+df_riesgo = inv[["Bodega_Origen","Ultima_Revision"]].drop_duplicates().merge(
+    tickets_bodega, on="Bodega_Origen", how="left"
+)
+
 df_riesgo["Ultima_Revision"] = pd.to_datetime(df_riesgo["Ultima_Revision"], errors="coerce")
 df_riesgo["Dias_Ultima_Revision"] = (pd.Timestamp.today() - df_riesgo["Ultima_Revision"]).dt.days
 df_riesgo["Ticket_Soporte_Abierto"] = df_riesgo["Ticket_Soporte_Abierto"].fillna(0)
 
+# Gráfico combinado
 fig, ax1 = plt.subplots(figsize=(10,4))
 ax1.bar(df_riesgo["Bodega_Origen"], df_riesgo["Ticket_Soporte_Abierto"], color="red", alpha=0.6, label="Tickets de Soporte")
 ax2 = ax1.twinx()
@@ -542,6 +555,7 @@ fig.tight_layout()
 st.pyplot(fig)
 
 st.dataframe(df_riesgo[["Bodega_Origen","Dias_Ultima_Revision","Ticket_Soporte_Abierto"]])
+
 
 
 
