@@ -565,11 +565,10 @@ fig, ax = plt.subplots(figsize=(12,6))
 scatter = ax.scatter(
     df_riesgo["Dias_Ultima_Revision"].values,
     df_riesgo["Tickets_Abiertos"].values,
-    s=(df_riesgo["Stock_Total"] / df_riesgo["Stock_Total"].max() * 500 + 50),  # tamaño proporcional al stock
+    s=(df_riesgo["Stock_Total"] / df_riesgo["Stock_Total"].max() * 500 + 50), 
     c=df_riesgo["Riesgo"].values,
     cmap="Reds",
     alpha=0.7,
-    edgecolors="black"
 )
 
 # Añadir etiquetas solo a las 5 bodegas más críticas (mayor riesgo)
