@@ -183,8 +183,11 @@ if not datasets_disponibles:
 if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" in datasets_disponibles:
 
     st.markdown("---")
-    st.header("👻 FASE 2 – Análisis de SKU Fantasma")
+    st.header("👻 FASE 2 – Análisis Avanzado de SKU Fantasma")
 
+    # ==============================
+    # PREPARACIÓN DE DATOS
+    # ==============================
     inv = datasets["Inventario Central"]["clean"].copy()
     trx = datasets["Transacciones Logísticas"]["clean"].copy()
 
@@ -192,58 +195,132 @@ if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" 
     trx["SKU_ID"] = trx["SKU_ID"].astype(str).str.strip()
 
     merged = trx.merge(inv[["SKU_ID"]], on="SKU_ID", how="left", indicator=True)
-    merged["sku_status"] = merged["_merge"].apply(
-        lambda x: "FANTASMA" if x == "left_only" else "VALIDO"
-    )
+    merged["sku_status"] = merged["_merge"].map({
+        "both": "VALIDO",
+        "left_only": "FANTASMA"
+    })
 
-    # -------------------------------------------------------------------------
-    # DASHBOARD 1 – VISIBILIDAD DEL SKU FANTASMA
-    # -------------------------------------------------------------------------
+    # Normalización financiera
+    merged["Cantidad_Vendida"] = merged["Cantidad_Vendida"].fillna(0)
+    merged["Precio_Venta_Final"] = merged["Precio_Venta_Final"].fillna(0)
+    merged["ingreso"] = merged["Cantidad_Vendida"] * merged["Precio_Venta_Final"]
+
+    # ==============================
+    # DASHBOARD 1 – VISIBILIDAD SKU
+    # ==============================
     st.subheader("📦 Visibilidad de SKUs Fantasma")
 
     resumen = merged["sku_status"].value_counts().reset_index()
     resumen.columns = ["Estado SKU", "Cantidad"]
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     col1.metric("Transacciones Totales", len(merged))
-    col2.metric("SKUs Fantasma", resumen.loc[resumen["Estado SKU"] == "FANTASMA", "Cantidad"].sum())
+    col2.metric(
+        "SKUs Fantasma",
+        int(resumen.loc[resumen["Estado SKU"] == "FANTASMA", "Cantidad"].sum())
+    )
+    col3.metric(
+        "% Transacciones Fantasma",
+        f"{(resumen.loc[resumen['Estado SKU']=='FANTASMA','Cantidad'].sum() / len(merged))*100:.2f}%"
+    )
 
-    fig, ax = plt.subplots()
-    ax.bar(resumen["Estado SKU"], resumen["Cantidad"])
-    st.pyplot(fig)
+    fig1, ax1 = plt.subplots(figsize=(6, 4))
+    colors = ["#2ecc71", "#e74c3c"]
+    ax1.bar(resumen["Estado SKU"], resumen["Cantidad"], color=colors)
+    ax1.set_title("Distribución de Transacciones por Estado SKU")
+    ax1.set_ylabel("Número de Transacciones")
+    ax1.grid(axis="y", alpha=0.3)
 
-    # -------------------------------------------------------------------------
+    st.pyplot(fig1)
+
+    st.download_button(
+        "📥 Descargar gráfico (PNG)",
+        data=fig1_to_bytes := (
+            fig1.canvas.draw(),
+            fig1.canvas.tostring_rgb()
+        ),
+        file_name="distribucion_sku_fantasma.png",
+        mime="image/png"
+    )
+
+    st.download_button(
+        "📥 Descargar resumen SKU (CSV)",
+        resumen.to_csv(index=False),
+        "resumen_sku_fantasma.csv",
+        "text/csv"
+    )
+
+    # ==============================
     # DASHBOARD 2 – IMPACTO FINANCIERO
-    # -------------------------------------------------------------------------
+    # ==============================
     st.subheader("💰 Impacto Financiero del SKU Fantasma")
-
-    merged["Cantidad_Vendida"] = merged["Cantidad_Vendida"].fillna(0)
-    merged["Precio_Venta_Final"] = merged["Precio_Venta_Final"].fillna(0)
-    merged["ingreso"] = merged["Cantidad_Vendida"] * merged["Precio_Venta_Final"]
 
     impacto = merged.groupby("sku_status")["ingreso"].sum().reset_index()
 
-    total = impacto["ingreso"].sum()
-    fantasma = impacto.loc[impacto["sku_status"] == "FANTASMA", "ingreso"].sum()
+    total_ingresos = impacto["ingreso"].sum()
+    ingresos_fantasma = impacto.loc[
+        impacto["sku_status"] == "FANTASMA", "ingreso"
+    ].sum()
 
     col1, col2 = st.columns(2)
-    col1.metric("Ingreso Total (USD)", f"{total:,.0f}")
-    col2.metric("% Ingresos en Riesgo", f"{(fantasma/total)*100:.2f}%")
+    col1.metric("Ingreso Total (USD)", f"{total_ingresos:,.0f}")
+    col2.metric(
+        "% Ingresos en Riesgo",
+        f"{(ingresos_fantasma / total_ingresos) * 100:.2f}%" if total_ingresos > 0 else "0%"
+    )
 
-    # -------------------------------------------------------------------------
+    fig2, ax2 = plt.subplots(figsize=(6, 4))
+    ax2.bar(
+        impacto["sku_status"],
+        impacto["ingreso"],
+        color=["#2ecc71", "#e74c3c"]
+    )
+    ax2.set_title("Ingresos por Estado del SKU")
+    ax2.set_ylabel("Ingreso (USD)")
+    ax2.grid(axis="y", alpha=0.3)
+
+    st.pyplot(fig2)
+
+    st.download_button(
+        "📥 Descargar impacto financiero (CSV)",
+        impacto.to_csv(index=False),
+        "impacto_financiero_sku_fantasma.csv",
+        "text/csv"
+    )
+
+    # ==============================
     # DASHBOARD 3 – STORYTELLING EJECUTIVO
-    # -------------------------------------------------------------------------
-    st.subheader("🧠 Storytelling Ejecutivo del Riesgo")
+    # ==============================
+    st.subheader("🧠 Storytelling Ejecutivo del Riesgo Operativo")
 
     resumen_exec = merged.groupby("sku_status").agg(
         transacciones=("SKU_ID", "count"),
-        ingreso_total=("ingreso", "sum")
+        ingreso_total=("ingreso", "sum"),
+        ingreso_promedio=("ingreso", "mean")
     ).reset_index()
 
     st.dataframe(resumen_exec, use_container_width=True)
 
-    st.info(
-        "Los SKUs fantasma representan una falla crítica de gobernanza del inventario: "
-        "generan ingresos sin respaldo físico, distorsionan márgenes y comprometen "
-        "la toma de decisiones estratégicas."
+    st.download_button(
+        "📥 Descargar resumen ejecutivo (CSV)",
+        resumen_exec.to_csv(index=False),
+        "resumen_ejecutivo_sku_fantasma.csv",
+        "text/csv"
     )
+
+    st.info(
+        """
+        🔎 **Insight Ejecutivo**  
+        Los **SKUs Fantasma** representan transacciones que generan ingresos sin respaldo
+        en inventario físico.  
+        
+        👉 Esto implica:
+        - Distorsión de márgenes y KPIs financieros  
+        - Riesgo en reportes a dirección y auditoría  
+        - Falla estructural en la gobernanza del dato maestro (SKU)  
+
+        📌 **Recomendación**: bloquear transacciones con SKU no registrado
+        o implementar validación en tiempo real contra inventario maestro.
+        """
+    )
+
