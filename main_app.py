@@ -784,3 +784,41 @@ bodega_summary = trx_inv_fb.groupby("Bodega_Origen").agg(
     Satisfaccion_Prom=("Satisfaccion_NPS","mean"),
     Num_Transacciones=("Transaccion_ID","count")
 ).reset_index()
+
+# ---------------------------------------------------
+# Visualización Scatter
+# ---------------------------------------------------
+st.subheader("👁️ Riesgo Operativo por Bodega: Antigüedad de Revisión vs Tasa de Tickets")
+
+fig, ax = plt.subplots(figsize=(10, 6))
+sc = ax.scatter(
+    bodega_summary["Antiguedad_Revision_Prom"],
+    bodega_summary["Tasa_Tickets"],
+    s=bodega_summary["Num_Transacciones"] * 5,  # tamaño burbuja según volumen
+    c=bodega_summary["Satisfaccion_Prom"],      # color según satisfacción
+    cmap="RdYlGn_r",
+    alpha=0.8,
+    edgecolors="black"
+)
+
+for _, row in bodega_summary.iterrows():
+    ax.text(
+        row["Antiguedad_Revision_Prom"] + 0.5,
+        row["Tasa_Tickets"] + 0.005,
+        row["Bodega_Origen"],
+        fontsize=8
+    )
+
+ax.set_xlabel("Antigüedad Promedio de Última Revisión (días)")
+ax.set_ylabel("Tasa de Tickets de Soporte Abierto")
+ax.set_title("Bodegas Operando a Ciegas y su Impacto en Satisfacción")
+cbar = plt.colorbar(sc)
+cbar.set_label("Satisfacción NPS Promedio")
+ax.grid(True, alpha=0.3)
+st.pyplot(fig)
+
+# ---------------------------------------------------
+# Tabla de resumen por bodega
+# ---------------------------------------------------
+st.subheader("📋 Resumen por Bodega")
+st.dataframe(bodega_summary.sort_values("Tasa_Tickets", ascending=False))
