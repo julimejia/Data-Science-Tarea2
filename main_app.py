@@ -288,11 +288,11 @@ for name, (file, loader, required_cols) in FILES_CONFIG.items():
         continue
 
     df_raw, df_clean, filas_eliminadas = loader(file)
-    health = run_healthcheck(df_raw, required_cols)
-    health["filas_eliminadas"] = filas_eliminadas
+    health_clean = run_healthcheck(df_clean, required_cols)
+    health_clean["filas_eliminadas"] = filas_eliminadas
 
-    datasets[name] = {"raw": df_raw, "clean": df_clean, "health": health}
-    health_status[name] = health["status"]
+    datasets[name] = {"raw": df_raw, "clean": df_clean, "health": health_clean}
+    health_status[name] = health_clean["status"]
 
 # =============================================================================
 # VISUALIZACIÓN DEL HEALTHCHECK (PROFUNDO)
