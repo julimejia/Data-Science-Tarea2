@@ -254,3 +254,121 @@ st.download_button(
 )
 
 st.caption("Dashboard con healthcheck flexible | Streamlit")
+
+
+# ==============================
+# DASHBOARD 1 - SKU FANTASMA
+# ==============================
+st.markdown("## 👻 Dashboard 1: Visibilidad del SKU Fantasma")
+
+if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" in datasets_disponibles:
+    inv = datasets["Inventario Central"]["clean"]
+    trx = datasets["Transacciones Logísticas"]["clean"]
+
+    inv["SKU_ID"] = inv["SKU_ID"].astype(str)
+    trx["SKU_ID"] = trx["SKU_ID"].astype(str)
+
+    merged = trx.merge(inv[["SKU_ID"]], on="SKU_ID", how="left", indicator=True)
+    merged["sku_status"] = merged["_merge"].apply(
+        lambda x: "FANTASMA" if x == "left_only" else "VALIDO"
+    )
+
+    resumen = merged["sku_status"].value_counts().reset_index()
+    resumen.columns = ["Estado SKU", "Cantidad"]
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Transacciones Totales", len(merged))
+    with col2:
+        st.metric(
+            "SKUs Fantasma",
+            int(resumen[resumen["Estado SKU"] == "FANTASMA"]["Cantidad"])
+        )
+
+    st.subheader("Distribución de Estado del SKU")
+    fig, ax = plt.subplots()
+    ax.bar(resumen["Estado SKU"], resumen["Cantidad"])
+    ax.set_ylabel("Número de Transacciones")
+    st.pyplot(fig)
+
+    st.subheader("Ejemplos de Transacciones con SKU Fantasma")
+    st.dataframe(
+        merged[merged["sku_status"] == "FANTASMA"].head(20),
+        use_container_width=True
+    )
+
+# ==============================
+# DASHBOARD 2 - IMPACTO FINANCIERO
+# ==============================
+st.markdown("## 💰 Dashboard 2: Impacto Financiero del SKU Fantasma")
+
+if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" in datasets_disponibles:
+    inv = datasets["Inventario Central"]["clean"]
+    trx = datasets["Transacciones Logísticas"]["clean"]
+
+    inv["SKU_ID"] = inv["SKU_ID"].astype(str)
+    trx["SKU_ID"] = trx["SKU_ID"].astype(str)
+
+    df = trx.merge(inv[["SKU_ID"]], on="SKU_ID", how="left", indicator=True)
+    df["sku_status"] = df["_merge"].apply(
+        lambda x: "FANTASMA" if x == "left_only" else "VALIDO"
+    )
+
+    df["ingreso"] = df["Cantidad_Vendida"] * df["Precio_Venta_Final"]
+
+    impacto = df.groupby("sku_status")["ingreso"].sum().reset_index()
+
+    total_ingresos = impacto["ingreso"].sum()
+    ingresos_fantasma = impacto.loc[
+        impacto["sku_status"] == "FANTASMA", "ingreso"
+    ].values[0]
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Ingreso Total (USD)", f"{total_ingresos:,.0f}")
+    with col2:
+        st.metric(
+            "% Ingresos en Riesgo",
+            f"{(ingresos_fantasma / total_ingresos) * 100:.2f}%"
+        )
+
+    st.subheader("Ingresos por Estado del SKU")
+    fig, ax = plt.subplots()
+    ax.bar(impacto["sku_status"], impacto["ingreso"])
+    ax.set_ylabel("Ingreso (USD)")
+    st.pyplot(fig)
+
+
+# ==============================
+# DASHBOARD 3 - STORYTELLING EJECUTIVO
+# ==============================
+st.markdown("## 🧠 Dashboard 3: Storytelling del Riesgo Operativo")
+
+if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" in datasets_disponibles:
+    inv = datasets["Inventario Central"]["clean"]
+    trx = datasets["Transacciones Logísticas"]["clean"]
+
+    inv["SKU_ID"] = inv["SKU_ID"].astype(str)
+    trx["SKU_ID"] = trx["SKU_ID"].astype(str)
+
+    df = trx.merge(inv, on="SKU_ID", how="left", indicator=True)
+    df["sku_status"] = df["_merge"].apply(
+        lambda x: "FANTASMA" if x == "left_only" else "VALIDO"
+    )
+
+    df["ingreso"] = df["Cantidad_Vendida"] * df["Precio_Venta_Final"]
+
+    resumen_exec = df.groupby("sku_status").agg(
+        transacciones=("SKU_ID", "count"),
+        ingreso_total=("ingreso", "sum")
+    ).reset_index()
+
+    st.subheader("Resumen Ejecutivo del Riesgo")
+    st.dataframe(resumen_exec, use_container_width=True)
+
+    st.info(
+        "Las transacciones marcadas como SKU FANTASMA no poseen costo unitario asociado, "
+        "por lo cual su margen no puede ser calculado. Incluirlas sin distinción "
+        "genera una sobreestimación del desempeño financiero y evidencia una "
+        "falla crítica en la gobernanza del inventario."
+    )
