@@ -49,29 +49,35 @@ with st.sidebar:
 # ==============================
 def cargar_feedback(file):
     df = pd.read_csv(file)
+    # Limpiar edades inválidas
     df_limpio = df[(df["Edad_Cliente"] >= 0) & (df["Edad_Cliente"] <= 110)].copy()
-    return df, df_limpio
+    filas_eliminadas = len(df) - len(df_limpio)
+    return df, df_limpio, filas_eliminadas
 
 def cargar_inventario(file):
     df = pd.read_csv(file)
     df_limpio = df.copy()
+    filas_eliminadas = 0
+    # Eliminamos índice 500 si existe
     if 500 in df_limpio.index:
         df_limpio = df_limpio.drop(index=500)
-    df_limpio = df_limpio[df_limpio["Stock_Actual"] >= 0]
-    return df, df_limpio
+        filas_eliminadas += 1
+    # Eliminamos stock negativo
+    mask = df_limpio["Stock_Actual"] < 0
+    filas_eliminadas += mask.sum()
+    df_limpio = df_limpio[~mask]
+    return df, df_limpio, filas_eliminadas
 
 def cargar_transacciones(file):
     df = pd.read_csv(file)
+    # Convertir columnas de fecha
     for col in df.columns:
         if "fecha" in col.lower():
             df[col] = pd.to_datetime(df[col], errors="coerce")
-    return df, df.copy()
+    return df, df.copy(), 0  # No eliminamos filas por default
 
 # ==============================
-# HEALTHCHECK CENTRALIZADO (inmediato)
-# - For each uploaded file we run an immediate health check that returns
-#   basic metadata, missing-value percentages, duplicate counts, dtypes
-#   and required-column validation. Results are stored in `datasets[name]["health"]`.
+# HEALTHCHECK CENTRALIZADO
 # ==============================
 FILES_CONFIG = {
     "Feedback de Clientes": {
@@ -95,17 +101,22 @@ def run_healthcheck(df_raw, df_clean=None, required_cols=None):
     hc = {}
     hc["rows"] = len(df_raw)
     hc["cols"] = len(df_raw.columns)
-    # percent missing (rounded)
     hc["missing_pct"] = (df_raw.isna().mean() * 100).round(2).to_dict()
     hc["missing_count"] = df_raw.isna().sum().to_dict()
     hc["duplicates"] = int(df_raw.duplicated().sum())
     hc["dtypes"] = df_raw.dtypes.astype(str).to_dict()
     hc["sample_head"] = df_raw.head(5)
+    # Chequeo de columnas requeridas
     missing_required = []
     if required_cols:
         missing_required = list(set(required_cols) - set(df_raw.columns))
     hc["missing_required_cols"] = missing_required
     hc["status"] = "ok" if not missing_required else "invalid_cols"
+    # Score simple de healthcheck
+    score = 100
+    score -= sum(hc["missing_pct"].values()) / 10  # penaliza missing
+    score -= hc["duplicates"] * 0.5  # penaliza duplicados
+    hc["health_score"] = max(0, round(score, 2))
     return hc
 
 health_status = {}
@@ -119,8 +130,9 @@ for name, cfg in FILES_CONFIG.items():
         continue
 
     try:
-        df_raw, df_clean = cfg["loader"](file)
+        df_raw, df_clean, filas_eliminadas = cfg["loader"](file)
         health = run_healthcheck(df_raw, df_clean, cfg.get("required_cols"))
+        health["filas_eliminadas"] = filas_eliminadas
 
         datasets[name] = {"raw": df_raw, "clean": df_clean, "health": health}
 
@@ -142,12 +154,10 @@ for col, (name, status) in zip(cols, health_status.items()):
     with col:
         if status == "ok":
             st.success(f"✅ {name}")
-            # show a compact health summary
             health = datasets.get(name, {}).get("health")
             if health:
                 with st.expander("Detalles Healthcheck"):
-                    st.markdown(f"- **Filas:** {health['rows']}  \n- **Columnas:** {health['cols']}  \n- **Duplicados:** {health['duplicates']}")
-                    # show top 5 missing columns by percent
+                    st.markdown(f"- **Filas:** {health['rows']}  \n- **Columnas:** {health['cols']}  \n- **Duplicados:** {health['duplicates']}  \n- **Filas eliminadas:** {health['filas_eliminadas']}  \n- **Health Score:** {health['health_score']}")
                     missing_pct = {k: v for k, v in health["missing_pct"].items() if v > 0}
                     if missing_pct:
                         sorted_missing = dict(sorted(missing_pct.items(), key=lambda x: x[1], reverse=True))
@@ -160,7 +170,6 @@ for col, (name, status) in zip(cols, health_status.items()):
             st.warning(f"⚠️ {name}\nNo cargado")
 
         elif "invalid_cols" in status:
-            # show which required columns are missing if available
             missing_list = []
             if name in datasets:
                 missing_list = datasets[name]["health"].get("missing_required_cols", [])
@@ -195,7 +204,6 @@ st.markdown("---")
 # MÉTRICAS GENERALES
 # ==============================
 st.subheader("📊 Métricas Generales")
-
 col1, col2, col3 = st.columns(3)
 with col1:
     st.metric("Filas (raw)", len(df_raw))
@@ -221,7 +229,6 @@ if mostrar_limpieza:
 # ANÁLISIS POR DATASET
 # ==============================
 st.markdown("## 📈 Análisis Detallado")
-
 if dataset_option == "Feedback de Clientes":
     fig, ax = plt.subplots()
     df_clean["Edad_Cliente"].hist(bins=30, ax=ax, edgecolor="black")
@@ -231,10 +238,7 @@ if dataset_option == "Feedback de Clientes":
 elif dataset_option == "Inventario Central":
     criticos = df_clean[df_clean["Stock_Actual"] < df_clean["Punto_Reorden"]]
     st.warning(f"🚨 Productos críticos: {len(criticos)}")
-    st.dataframe(
-        criticos[["SKU_ID", "Categoria", "Stock_Actual", "Punto_Reorden"]],
-        use_container_width=True
-    )
+    st.dataframe(criticos[["SKU_ID", "Categoria", "Stock_Actual", "Punto_Reorden"]], use_container_width=True)
 
 elif dataset_option == "Transacciones Logísticas":
     st.dataframe(df_clean.head(20), use_container_width=True)
@@ -244,7 +248,6 @@ elif dataset_option == "Transacciones Logísticas":
 # ==============================
 st.markdown("---")
 st.subheader("📥 Descargar Dataset Procesado")
-
 csv = df_clean.to_csv(index=False)
 st.download_button(
     "Descargar CSV",
@@ -252,27 +255,25 @@ st.download_button(
     f"{dataset_option.replace(' ', '_').lower()}_{datetime.now().strftime('%Y%m%d')}.csv",
     "text/csv"
 )
-
 st.caption("Dashboard con healthcheck flexible | Streamlit")
 
-
 # ==============================
-# DASHBOARD 1 - SKU FANTASMA
+# DASHBOARDS SKU FANTASMA Y FINANCIERO
 # ==============================
-st.markdown("## 👻 Dashboard 1: Visibilidad del SKU Fantasma")
-
 if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" in datasets_disponibles:
     inv = datasets["Inventario Central"]["clean"]
     trx = datasets["Transacciones Logísticas"]["clean"]
 
-    inv["SKU_ID"] = inv["SKU_ID"].astype(str)
-    trx["SKU_ID"] = trx["SKU_ID"].astype(str)
+    # Normalizamos SKU_ID
+    inv["SKU_ID"] = inv["SKU_ID"].astype(str).str.strip()
+    trx["SKU_ID"] = trx["SKU_ID"].astype(str).str.strip()
 
+    # Merge para detectar SKUs fantasma
     merged = trx.merge(inv[["SKU_ID"]], on="SKU_ID", how="left", indicator=True)
-    merged["sku_status"] = merged["_merge"].apply(
-        lambda x: "FANTASMA" if x == "left_only" else "VALIDO"
-    )
+    merged["sku_status"] = merged["_merge"].apply(lambda x: "VALIDO" if x=="both" else "FANTASMA")
 
+    # Dashboard 1: Visibilidad SKU Fantasma
+    st.markdown("## 👻 Dashboard 1: Visibilidad del SKU Fantasma")
     resumen = merged["sku_status"].value_counts().reset_index()
     resumen.columns = ["Estado SKU", "Cantidad"]
 
@@ -280,10 +281,7 @@ if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" 
     with col1:
         st.metric("Transacciones Totales", len(merged))
     with col2:
-        st.metric(
-            "SKUs Fantasma",
-            int(resumen[resumen["Estado SKU"] == "FANTASMA"]["Cantidad"])
-        )
+        st.metric("SKUs Fantasma", int(resumen[resumen["Estado SKU"]=="FANTASMA"]["Cantidad"].sum()))
 
     st.subheader("Distribución de Estado del SKU")
     fig, ax = plt.subplots()
@@ -292,45 +290,24 @@ if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" 
     st.pyplot(fig)
 
     st.subheader("Ejemplos de Transacciones con SKU Fantasma")
-    st.dataframe(
-        merged[merged["sku_status"] == "FANTASMA"].head(20),
-        use_container_width=True
-    )
+    st.dataframe(merged[merged["sku_status"]=="FANTASMA"].head(20), use_container_width=True)
 
-# ==============================
-# DASHBOARD 2 - IMPACTO FINANCIERO
-# ==============================
-st.markdown("## 💰 Dashboard 2: Impacto Financiero del SKU Fantasma")
+    # Dashboard 2: Impacto Financiero
+    st.markdown("## 💰 Dashboard 2: Impacto Financiero del SKU Fantasma")
+    df_fin = merged.copy()
+    df_fin["Cantidad_Vendida"] = df_fin["Cantidad_Vendida"].fillna(0)
+    df_fin["Precio_Venta_Final"] = df_fin["Precio_Venta_Final"].fillna(0)
+    df_fin["ingreso"] = df_fin["Cantidad_Vendida"] * df_fin["Precio_Venta_Final"]
 
-if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" in datasets_disponibles:
-    inv = datasets["Inventario Central"]["clean"]
-    trx = datasets["Transacciones Logísticas"]["clean"]
-
-    inv["SKU_ID"] = inv["SKU_ID"].astype(str)
-    trx["SKU_ID"] = trx["SKU_ID"].astype(str)
-
-    df = trx.merge(inv[["SKU_ID"]], on="SKU_ID", how="left", indicator=True)
-    df["sku_status"] = df["_merge"].apply(
-        lambda x: "FANTASMA" if x == "left_only" else "VALIDO"
-    )
-
-    df["ingreso"] = df["Cantidad_Vendida"] * df["Precio_Venta_Final"]
-
-    impacto = df.groupby("sku_status")["ingreso"].sum().reset_index()
-
+    impacto = df_fin.groupby("sku_status")["ingreso"].sum().reset_index()
     total_ingresos = impacto["ingreso"].sum()
-    ingresos_fantasma = impacto.loc[
-        impacto["sku_status"] == "FANTASMA", "ingreso"
-    ].values[0]
+    ingresos_fantasma = impacto.loc[impacto["sku_status"]=="FANTASMA", "ingreso"].sum()
 
     col1, col2 = st.columns(2)
     with col1:
         st.metric("Ingreso Total (USD)", f"{total_ingresos:,.0f}")
     with col2:
-        st.metric(
-            "% Ingresos en Riesgo",
-            f"{(ingresos_fantasma / total_ingresos) * 100:.2f}%"
-        )
+        st.metric("% Ingresos en Riesgo", f"{(ingresos_fantasma/total_ingresos)*100:.2f}%")
 
     st.subheader("Ingresos por Estado del SKU")
     fig, ax = plt.subplots()
@@ -338,34 +315,14 @@ if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" 
     ax.set_ylabel("Ingreso (USD)")
     st.pyplot(fig)
 
-
-# ==============================
-# DASHBOARD 3 - STORYTELLING EJECUTIVO
-# ==============================
-st.markdown("## 🧠 Dashboard 3: Storytelling del Riesgo Operativo")
-
-if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" in datasets_disponibles:
-    inv = datasets["Inventario Central"]["clean"]
-    trx = datasets["Transacciones Logísticas"]["clean"]
-
-    inv["SKU_ID"] = inv["SKU_ID"].astype(str)
-    trx["SKU_ID"] = trx["SKU_ID"].astype(str)
-
-    df = trx.merge(inv, on="SKU_ID", how="left", indicator=True)
-    df["sku_status"] = df["_merge"].apply(
-        lambda x: "FANTASMA" if x == "left_only" else "VALIDO"
-    )
-
-    df["ingreso"] = df["Cantidad_Vendida"] * df["Precio_Venta_Final"]
-
-    resumen_exec = df.groupby("sku_status").agg(
-        transacciones=("SKU_ID", "count"),
-        ingreso_total=("ingreso", "sum")
+    # Dashboard 3: Storytelling Ejecutivo
+    st.markdown("## 🧠 Dashboard 3: Storytelling del Riesgo Operativo")
+    resumen_exec = df_fin.groupby("sku_status").agg(
+        transacciones=("SKU_ID","count"),
+        ingreso_total=("ingreso","sum")
     ).reset_index()
-
     st.subheader("Resumen Ejecutivo del Riesgo")
     st.dataframe(resumen_exec, use_container_width=True)
-
     st.info(
         "Las transacciones marcadas como SKU FANTASMA no poseen costo unitario asociado, "
         "por lo cual su margen no puede ser calculado. Incluirlas sin distinción "
