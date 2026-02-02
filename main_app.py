@@ -753,21 +753,4 @@ trx["SKU_ID"] = trx["SKU_ID"].astype(str).str.strip()
 trx["Transaccion_ID"] = trx["Transaccion_ID"].astype(str).str.strip()
 fb["Transaccion_ID"] = fb["Transaccion_ID"].astype(str).str.strip()
 
-# ---------------------------------------------------
-# Merge 1: Transacciones + Inventario (para traer bodega y fecha de revisión)
-# ---------------------------------------------------
-trx_inv = trx.merge(
-    inv[["SKU_ID","Bodega_Origen","ultima_revision"]],
-    on="SKU_ID",
-    how="left"
-)
-
-# ---------------------------------------------------
-# Merge 2: Resultado + Feedback (para traer tickets y satisfacción)
-# ---------------------------------------------------
-trx_inv_fb = trx_inv.merge(
-    fb[["Transaccion_ID","Ticket_Soporte_Abierto","Satisfaccion_NPS"]],
-    on="Transaccion_ID",
-    how="left"
-)
 
