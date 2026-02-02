@@ -37,6 +37,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 import io
 
+
 # =============================================================================
 # CONFIGURACIÓN DE LA PÁGINA
 # =============================================================================
@@ -725,5 +726,85 @@ if not fidelidad_riesgo.empty:
 
     st.info("Asegúrate de tener cargados los datasets de Inventario Central y Feedback de Clientes.") 
 
+
+# Asegurarnos que los IDs estén limpios
+fb_sku["Transaccion_ID"] = fb_sku["Transaccion_ID"].astype(str).str.strip()
+trx["Transaccion_ID"] = trx["Transaccion_ID"].astype(str).str.strip()
+trx["Bodega_ID"] = trx["Bodega_ID"].astype(str).str.strip() if "Bodega_ID" in trx.columns else "UNKNOWN"
+
+# Merge Feedback + Transacciones para obtener SKU_ID y Bodega
+fb_trx = fb_sku.merge(
+    trx[["Transaccion_ID","SKU_ID","Bodega_ID"]], 
+    on="Transaccion_ID", 
+    how="left"
+)
+# ---------- 5 Relacion bodegas - satisfaccion ----------
+
+# Merge con inventario para obtener Fecha_Ultima_Revision y Stock_Actual
+fb_trx_inv = fb_trx.merge(
+    inv[["SKU_ID","Bodega_ID","Fecha_Ultima_Revision","Stock_Actual"]],
+    on=["SKU_ID","Bodega_ID"],
+    how="left"
+) 
+
+
+
+# Convertir a datetime
+fb_trx_inv["Fecha_Ultima_Revision"] = pd.to_datetime(fb_trx_inv["Fecha_Ultima_Revision"], errors="coerce")
+fb_trx_inv["Ticket_Soporte_Abierto"] = fb_trx_inv["Ticket_Soporte_Abierto"].fillna(0).astype(int)
+
+# Calcular antigüedad de revisión
+hoy = pd.Timestamp.today()
+fb_trx_inv["Antiguedad_Revision"] = (hoy - fb_trx_inv["Fecha_Ultima_Revision"]).dt.days
+
+# Agrupar por Bodega
+bodega_summary = fb_trx_inv.groupby("Bodega_ID").agg(
+    Total_Transacciones=("Transaccion_ID","count"),
+    Tickets_Abiertos=("Ticket_Soporte_Abierto","sum"),
+    NPS_Promedio=("Satisfaccion_NPS","mean"),
+    Antiguedad_Revision_Media=("Antiguedad_Revision","mean")
+).reset_index()
+
+# Calcular tasa de tickets
+bodega_summary["Tickets_Abiertos_Pct"] = (bodega_summary["Tickets_Abiertos"] / bodega_summary["Total_Transacciones"]) * 100
+
+
+st.subheader("📍 Riesgo Operativo por Bodega: Antigüedad de Revisión vs Tickets de Soporte")
+
+fig, ax = plt.subplots(figsize=(10,6))
+
+scatter = ax.scatter(
+    bodega_summary["Antiguedad_Revision_Media"],
+    bodega_summary["Tickets_Abiertos_Pct"],
+    s=bodega_summary["Total_Transacciones"]/10,  # tamaño relativo al volumen
+    c=bodega_summary["NPS_Promedio"],           # color según satisfacción
+    cmap="RdYlGn_r",                            # verde = alta NPS, rojo = baja
+    alpha=0.8,
+    edgecolors='k'
+)
+
+ax.set_xlabel("Antigüedad Última Revisión (días)")
+ax.set_ylabel("Tasa de Tickets de Soporte (%)")
+ax.set_title("Bodegas Operando a Ciegas: Riesgo vs Satisfacción")
+
+# Colorbar NPS
+cbar = plt.colorbar(scatter, ax=ax)
+cbar.set_label("NPS Promedio")
+
+# Mostrar etiquetas de bodega en puntos críticos (opcional)
+for i, row in bodega_summary.iterrows():
+    if row["Tickets_Abiertos_Pct"] > 10 or row["Antiguedad_Revision_Media"] > 30:  # ejemplo: alertas
+        ax.text(row["Antiguedad_Revision_Media"]+0.5, row["Tickets_Abiertos_Pct"]+0.5, row["Bodega_ID"], fontsize=8)
+
+ax.grid(True, alpha=0.3)
+st.pyplot(fig)
+
+bodegas_riesgo = bodega_summary[
+    (bodega_summary["Tickets_Abiertos_Pct"] > 10) & 
+    (bodega_summary["Antiguedad_Revision_Media"] > 30)
+].sort_values("Tickets_Abiertos_Pct", ascending=False)
+
+st.subheader("🎯 Bodegas en Riesgo")
+st.dataframe(bodegas_riesgo[["Bodega_ID","Tickets_Abiertos_Pct","Antiguedad_Revision_Media","NPS_Promedio","Total_Transacciones"]])
 
 
