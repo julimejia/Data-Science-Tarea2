@@ -424,7 +424,15 @@ if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" 
 # FASE 3 – Análisis Avanzado y Storytelling
 # =============================================================================
 
-fb = datasets["Feedback de Clientes"]["clean"].copy()
+if "Feedback de Clientes" in datasets_disponibles:
+    fb = datasets["Feedback de Clientes"]["clean"].copy()
+else:
+    st.warning("⚠️ No se cargó Feedback de Clientes. Algunas métricas no estarán disponibles.")
+    fb = pd.DataFrame(columns=[
+        "Feedback_ID","Transaccion_ID","Rating_Producto","Rating_Logistica",
+        "Comentario_Texto","Recomienda_Marca","Ticket_Soporte_Abierto",
+        "Edad_Cliente","Satisfaccion_NPS"
+    ])
 
 st.header("📊 Fase 3 – Storytelling Avanzado")
 
