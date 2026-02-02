@@ -524,7 +524,6 @@ ax.set_title("Paradoja Stock Alto vs Sentimiento Negativo")
 st.pyplot(fig)
 
 # ---------- 5. Storytelling Riesgo Operativo Mejorado ----------
-# ---------- 5️⃣ Storytelling de Riesgo Operativo (Visual Avanzado) ----------
 st.subheader("5️⃣ Storytelling de Riesgo Operativo (Visual Avanzado)")
 
 # Contar tickets por SKU_ID
@@ -546,27 +545,29 @@ else:
     df_riesgo = df_riesgo_temp.copy()
 
 if not df_riesgo.empty:
-    # Procesar fechas si Ultima_Revision existe
+    # Fechas y días desde última revisión
     df_riesgo["Ultima_Revision"] = pd.to_datetime(df_riesgo.get("Ultima_Revision"), errors="coerce")
-    df_riesgo["Dias_Ultima_Revision"] = (pd.Timestamp.today() - df_riesgo["Ultima_Revision"]).dt.days.fillna(0)
-    df_riesgo["Stock_Total"] = df_riesgo.get("Stock_Actual", 0).fillna(0)
-    
-    # Calcular un índice de riesgo simple
-    df_riesgo["Riesgo"] = df_riesgo["Tickets_Abiertos"] * (df_riesgo["Dias_Ultima_Revision"] + 1)
+    df_riesgo["Dias_Ultima_Revision"] = (pd.Timestamp.today() - df_riesgo["Ultima_Revision"]).dt.days.fillna(0).astype(int)
 
-    # Scatter plot avanzado
+    # Stock total
+    df_riesgo["Stock_Total"] = df_riesgo.get("Stock_Actual", 0).fillna(0).astype(float)
+
+    # Riesgo = Tickets x (Días + 1)
+    df_riesgo["Riesgo"] = (df_riesgo["Tickets_Abiertos"].fillna(0) * (df_riesgo["Dias_Ultima_Revision"] + 1)).astype(float)
+
+    # Scatter plot avanzado (todos los datos numéricos están asegurados)
     fig, ax = plt.subplots(figsize=(10,6))
     
     scatter = ax.scatter(
-        df_riesgo["Dias_Ultima_Revision"],
-        df_riesgo["Tickets_Abiertos"],
-        s=(df_riesgo["Stock_Total"].fillna(0) / 10 + 50),  # tamaño proporcional al stock
-        c=df_riesgo["Riesgo"].fillna(0),                    # color por riesgo
+        df_riesgo["Dias_Ultima_Revision"].values,
+        df_riesgo["Tickets_Abiertos"].fillna(0).values,
+        s=(df_riesgo["Stock_Total"] / 10 + 50).values,  # tamaño proporcional al stock
+        c=df_riesgo["Riesgo"].values,                   # color por riesgo
         cmap="Reds",
         alpha=0.7
     )
 
-    # Etiquetas de Bodega para storytelling
+    # Etiquetas de Bodega
     if "Bodega_Origen" in df_riesgo.columns:
         for i, row in df_riesgo.iterrows():
             ax.text(
@@ -588,10 +589,9 @@ if not df_riesgo.empty:
     fig.tight_layout()
     st.pyplot(fig)
 
-    # Mostrar tabla ordenada por riesgo
+    # Tabla ordenada por riesgo
     display_cols = [c for c in ["Bodega_Origen","Dias_Ultima_Revision","Tickets_Abiertos","Stock_Total","Riesgo"] if c in df_riesgo.columns]
-    if display_cols:
-        st.dataframe(df_riesgo.sort_values("Riesgo", ascending=False)[display_cols])
+    st.dataframe(df_riesgo.sort_values("Riesgo", ascending=False)[display_cols])
 else:
     st.info("📊 Sin datos suficientes para análisis de riesgo operativo")
 
