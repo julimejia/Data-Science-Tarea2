@@ -774,4 +774,9 @@ trx_inv_fb["Antiguedad_Revision_Dias"] = (pd.Timestamp.today() - trx_inv_fb["Fec
 trx_inv_fb["Ticket_Soporte_Abierto"] = trx_inv_fb["Ticket_Soporte_Abierto"].fillna(0)
 trx_inv_fb["Satisfaccion_NPS"] = trx_inv_fb["Satisfaccion_NPS"].fillna(0)
 
-
+bodega_summary = trx_inv_fb.groupby("Bodega_Origen").agg(
+    Antiguedad_Revision_Prom=("Antiguedad_Revision_Dias","mean"),
+    Tasa_Tickets=("Ticket_Soporte_Abierto","mean"),
+    Satisfaccion_Prom=("Satisfaccion_NPS","mean"),
+    Num_Transacciones=("Transaccion_ID","count")
+).reset_index()
