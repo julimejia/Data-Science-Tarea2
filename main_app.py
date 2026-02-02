@@ -510,8 +510,112 @@ st.pyplot(fig)
 
 
 # ---------- 4️⃣ Diagnóstico de Fidelidad ----------
+st.subheader("4️⃣ Diagnóstico de Fidelidad: Stock Alto vs. Satisfacción Baja")
 
-# ---------- 4️⃣ Diagnóstico de Fidelidad: Stock vs NPS con Calidad y Precio ----------
+# Verificar que inv y fb_sku existan
+if 'inv' not in locals() or 'fb_sku' not in locals():
+    st.error("❌ No se han cargado Inventario Central o Feedback por SKU. Ejecuta Fase 2 primero.")
+    st.stop()
+
+# Normalizar nombres de categorías
+if 'Categoria' in inv.columns:
+    inv["Categoria"] = inv["Categoria"].fillna("").str.lower().str.replace("-", "").str.strip()
+    inv["Categoria"] = inv["Categoria"].replace({
+        "smartphone": "smartphone",
+        "smartphones": "smartphone"
+    })
+else:
+    st.error("❌ Columna 'Categoria' no encontrada en Inventario")
+    st.stop()
+
+# Merge con feedback por SKU
+df_fidelidad = inv.merge(
+    fb_sku.groupby("SKU_ID")["Satisfaccion_NPS"].mean().reset_index(),
+    on="SKU_ID",
+    how="left"
+)
+
+# Filtro de riesgo: stock alto (percentil 75) y NPS bajo (percentil 25)
+stock_p75 = df_fidelidad["Stock_Actual"].quantile(0.75)
+nps_p25 = df_fidelidad["Satisfaccion_NPS"].quantile(0.25)
+
+fidelidad_riesgo = df_fidelidad[
+    (df_fidelidad["Stock_Actual"] > stock_p75) &
+    (df_fidelidad["Satisfaccion_NPS"] < nps_p25)
+].copy()
+
+# Agrupar por categoría para dashboard
+categoria_summary = fidelidad_riesgo.groupby("Categoria").agg(
+    Cantidad_SKU=("SKU_ID","count"),
+    Stock_Total=("Stock_Actual","sum"),
+    NPS_Promedio=("Satisfaccion_NPS","mean")
+).reset_index()
+
+categoria_summary = categoria_summary.sort_values(["Cantidad_SKU","NPS_Promedio"], ascending=[False,True])
+
+# Mostrar tabla
+st.subheader("📋 Categorías Críticas")
+st.dataframe(categoria_summary, use_container_width=True, hide_index=True)
+
+# Gráfico: Stock vs NPS
+st.subheader("📍 Matriz de Riesgo: Stock vs Satisfacción")
+fig, ax = plt.subplots(figsize=(10,6))
+
+# Todos los SKUs
+ax.scatter(
+    df_fidelidad["Stock_Actual"],
+    df_fidelidad["Satisfaccion_NPS"],
+    alpha=0.5,
+    s=50,
+    color='blue',
+    label='Todos los SKUs'
+)
+
+# SKUs en riesgo
+if not fidelidad_riesgo.empty:
+    ax.scatter(
+        fidelidad_riesgo["Stock_Actual"],
+        fidelidad_riesgo["Satisfaccion_NPS"],
+        s=100,
+        color='red',
+        label=f'En Riesgo ({len(fidelidad_riesgo)})',
+        zorder=5
+    )
+
+# Líneas de referencia
+ax.axhline(y=nps_p25, color='orange', linestyle='--', label=f'NPS Bajo ({nps_p25:.0f})')
+ax.axvline(x=stock_p75, color='green', linestyle='--', label=f'Stock Alto ({stock_p75:.0f})')
+
+ax.set_xlabel("Stock Actual")
+ax.set_ylabel("Satisfacción NPS")
+ax.set_title("Identificación de SKUs Problemáticos")
+ax.legend()
+ax.grid(True, alpha=0.3)
+
+st.pyplot(fig)
+
+# Recomendaciones rápidas
+st.subheader("🎯 Análisis Rápido")
+if not fidelidad_riesgo.empty:
+    st.success(f"**Se encontraron {len(fidelidad_riesgo)} SKUs en riesgo**")
+    st.write("**Categorías más afectadas:**")
+    for idx, row in categoria_summary.head(3).iterrows():
+        st.write(f"- **{row['Categoria'].capitalize()}**: {row['Cantidad_SKU']} SKUs, NPS: {row['NPS_Promedio']:.0f}")
+else:
+    st.info("✅ No se encontraron SKUs con alto stock y baja satisfacción")
+
+# Botón de exportación
+if not fidelidad_riesgo.empty:
+    csv = fidelidad_riesgo[['SKU_ID','Categoria','Stock_Actual','Satisfaccion_NPS']].to_csv(index=False)
+    st.download_button(
+        label="📥 Exportar SKUs en Riesgo",
+        data=csv,
+        file_name="skus_riesgo.csv",
+        mime="text/csv"
+    )
+
+    st.info("Asegúrate de tener cargados los datasets de Inventario Central y Feedback de Clientes.") 
+
 st.subheader("📍 Matriz de Riesgo: Stock vs Satisfacción")
 
 # Aseguramos que las columnas existan
