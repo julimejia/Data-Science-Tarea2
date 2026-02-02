@@ -509,86 +509,66 @@ ax.set_title("Impacto financiero por tipo de SKU")
 st.pyplot(fig)
 
 # ---------- 4. Diagnóstico de Fidelidad ----------
-st.subheader("4️⃣ Diagnóstico de Fidelidad")
-df_fidelidad = inv.merge(fb_sku.groupby("SKU_ID")["Satisfaccion_NPS"].mean().reset_index(), on="SKU_ID", how="left")
-fidelidad_riesgo = df_fidelidad[(df_fidelidad["Stock_Actual"] > df_fidelidad["Stock_Actual"].median()) &
-                                (df_fidelidad["Satisfaccion_NPS"] < 50)]
-st.metric("SKUs con stock alto pero NPS bajo", len(fidelidad_riesgo))
-st.dataframe(fidelidad_riesgo[["SKU_ID","Categoria","Stock_Actual","Satisfaccion_NPS"]])
+# ---------- 4️⃣ Diagnóstico de Fidelidad ----------
+st.subheader("4️⃣ Diagnóstico de Fidelidad por Categoría")
 
-fig, ax = plt.subplots(figsize=(8,4))
-ax.scatter(fidelidad_riesgo["Stock_Actual"], fidelidad_riesgo["Satisfaccion_NPS"], color="purple")
-ax.set_xlabel("Stock Actual")
-ax.set_ylabel("Satisfacción NPS")
-ax.set_title("Paradoja Stock Alto vs Sentimiento Negativo")
-st.pyplot(fig)
+# Normalizar nombres de categorías
+inv["Categoria"] = inv["Categoria"].str.lower().str.replace("-", "").str.strip()
+# Ejemplo: unificar smart-phone y smartphones
+inv["Categoria"] = inv["Categoria"].replace({
+    "smartphone": "smartphone",
+    "smartphones": "smartphone"
+})
 
-# ---------- 5. Storytelling Riesgo Operativo Mejorado ----------
-# ===============================================================
-# ---------- 5️⃣ Storytelling de Riesgo Operativo ----------
-st.subheader("5️⃣ Storytelling de Riesgo Operativo (Antigüedad vs Tickets)")
-
-# Agrupar tickets por SKU_ID y asociar con inventario
-tickets_sku = fb_sku.groupby("SKU_ID")["Ticket_Soporte_Abierto"].sum().reset_index()
-tickets_sku.columns = ["SKU_ID", "Tickets_Abiertos"]
-
-# Merge con inventario para obtener Bodega_Origen, Stock y Última Revisión
-df_riesgo = tickets_sku.merge(
-    inv[["SKU_ID","Bodega_Origen","Stock_Actual","Ultima_Revision"]],
+# Merge con feedback por SKU
+df_fidelidad = inv.merge(
+    fb_sku.groupby("SKU_ID")["Satisfaccion_NPS"].mean().reset_index(),
     on="SKU_ID",
     how="left"
 )
 
-# Agrupar por Bodega
-df_riesgo = df_riesgo.groupby("Bodega_Origen").agg({
-    "Tickets_Abiertos":"sum",
-    "Stock_Actual":"sum",
-    "Ultima_Revision":"max"
-}).reset_index()
+# Filtrar SKUs con stock alto y NPS bajo
+stock_median = df_fidelidad["Stock_Actual"].median()
+fidelidad_riesgo = df_fidelidad[
+    (df_fidelidad["Stock_Actual"] > stock_median) & 
+    (df_fidelidad["Satisfaccion_NPS"] < 50)
+]
 
-# Calcular días desde la última revisión
-df_riesgo["Ultima_Revision"] = pd.to_datetime(df_riesgo["Ultima_Revision"], errors="coerce")
-df_riesgo["Dias_Ultima_Revision"] = (pd.Timestamp.today() - df_riesgo["Ultima_Revision"]).dt.days
-df_riesgo["Dias_Ultima_Revision"] = df_riesgo["Dias_Ultima_Revision"].fillna(0)
+# Métricas
+st.metric("SKUs con stock alto pero NPS bajo", len(fidelidad_riesgo))
 
-# Calcular riesgo operativo como Tickets x Días desde Última Revisión
-df_riesgo["Riesgo"] = df_riesgo["Tickets_Abiertos"] * (df_riesgo["Dias_Ultima_Revision"] + 1)
+# Agrupar por categoría para mostrar resumen
+categoria_summary = fidelidad_riesgo.groupby("Categoria").agg({
+    "SKU_ID": "count",
+    "Stock_Actual": "sum",
+    "Satisfaccion_NPS": "mean"
+}).reset_index().rename(columns={"SKU_ID": "Cantidad_SKU"})
+st.dataframe(categoria_summary.sort_values("Cantidad_SKU", ascending=False))
 
-# Scatter plot visual storytelling
-fig, ax = plt.subplots(figsize=(10,6))
+# Scatter plot: Stock vs NPS, por categoría
+fig, ax = plt.subplots(figsize=(10,5))
 
-scatter = ax.scatter(
-    df_riesgo["Dias_Ultima_Revision"].values,
-    df_riesgo["Tickets_Abiertos"].values,
-    s=(df_riesgo["Stock_Actual"] / df_riesgo["Stock_Actual"].max() * 500 + 50),  # tamaño según stock
-    c=df_riesgo["Riesgo"].values,  # color según riesgo
-    cmap="Reds",
-    alpha=0.7,
-    edgecolors="black"
-)
+# Usamos colores diferentes para cada categoría
+categorias = fidelidad_riesgo["Categoria"].unique()
+colors = plt.cm.tab20.colors  # paleta de colores
 
-# Etiquetas de bodega
-for i, row in df_riesgo.iterrows():
-    ax.text(
-        row["Dias_Ultima_Revision"] + 0.5,
-        row["Tickets_Abiertos"],
-        row["Bodega_Origen"],
-        fontsize=9
+for i, cat in enumerate(categorias):
+    subset = fidelidad_riesgo[fidelidad_riesgo["Categoria"] == cat]
+    ax.scatter(
+        subset["Stock_Actual"], 
+        subset["Satisfaccion_NPS"], 
+        s=50, 
+        color=colors[i % len(colors)], 
+        alpha=0.7,
+        label=cat.capitalize(),
+        edgecolor="black"
     )
 
-ax.set_xlabel("Días desde Última Revisión")
-ax.set_ylabel("Tickets de Soporte Abiertos")
-ax.set_title("Riesgo Operativo por Bodega: Antigüedad vs Tickets (Tamaño=Stock, Color=Riesgo)")
-cbar = plt.colorbar(scatter)
-cbar.set_label("Riesgo Operativo (Tickets x Días)")
-
+ax.set_xlabel("Stock Actual")
+ax.set_ylabel("Satisfacción NPS")
+ax.set_title("Paradoja: Stock Alto vs Sentimiento Negativo por Categoría")
+ax.legend(title="Categoría", bbox_to_anchor=(1.05, 1), loc="upper left")
 st.pyplot(fig)
 
-# Tabla de riesgo ordenada
-st.dataframe(
-    df_riesgo.sort_values("Riesgo", ascending=False)[
-        ["Bodega_Origen","Dias_Ultima_Revision","Tickets_Abiertos","Stock_Actual","Riesgo"]
-    ]
-)
 
-
+# ---------- 5. Storytelling Riesgo Operativo Mejorado ----------
