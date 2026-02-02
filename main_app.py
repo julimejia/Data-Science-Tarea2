@@ -757,7 +757,7 @@ fb["Transaccion_ID"] = fb["Transaccion_ID"].astype(str).str.strip()
 # Merge 1: Transacciones + Inventario (para traer bodega y fecha de revisión)
 # ---------------------------------------------------
 trx_inv = trx.merge(
-    inv[["SKU_ID","Bodega_Origen","Fecha_Ultima_Revision"]],
+    inv[["SKU_ID","bodega_origen","fecha_ultima_revision"]],
     on="SKU_ID",
     how="left"
 )
