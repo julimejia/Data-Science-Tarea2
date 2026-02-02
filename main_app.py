@@ -718,21 +718,47 @@ if not fidelidad_riesgo.empty:
 
 
 # ---------- Asegurar que las columnas existan ----------
-for col in ["Stock_Actual", "Satisfaccion_NPS", "Calidad_Producto", "Precio_Unitario"]:
-    if col not in df_fidelidad.columns:
-        df_fidelidad[col] = 0  # Placeholder si falta
+# ==========================================
+# 📌 Cálculo de Calidad por SKU y Merge con Precio
+# ==========================================
+if 'reviews' in globals() and not reviews.empty:
+    # Promedio de rating por SKU
+    calidad_por_sku = reviews.groupby("SKU_ID")["Rating"].mean().reset_index()
+    calidad_por_sku.rename(columns={"Rating":"Calidad_Producto"}, inplace=True)
+    
+    # Merge con inventario para traer Precio
+    df_fidelidad = inv.merge(calidad_por_sku, on="SKU_ID", how="left")
+    df_fidelidad = df_fidelidad.merge(inv[["SKU_ID","Precio_Unitario"]], on="SKU_ID", how="left")
+    
+    # Merge con NPS
+    if 'fb_sku' in locals() and not fb_sku.empty:
+        nps_por_sku = fb_sku.groupby("SKU_ID")["Satisfaccion_NPS"].mean().reset_index()
+        df_fidelidad = df_fidelidad.merge(nps_por_sku, on="SKU_ID", how="left")
+else:
+    st.warning("⚠️ No hay reviews cargadas. No se puede calcular Calidad de Producto.")
+    df_fidelidad = inv.copy()
+    df_fidelidad["Calidad_Producto"] = None
+    df_fidelidad["Satisfaccion_NPS"] = None
 
-# También asegurarnos que fidelidad_riesgo tenga esas columnas
-for col in ["Stock_Actual", "Satisfaccion_NPS", "Calidad_Producto", "Precio_Unitario"]:
-    if col not in fidelidad_riesgo.columns:
-        fidelidad_riesgo[col] = df_fidelidad[col]
+# ==========================================
+# ✅ Filtro de Riesgo
+# ==========================================
+stock_p75 = df_fidelidad["Stock_Actual"].quantile(0.75)
+nps_p25 = df_fidelidad["Satisfaccion_NPS"].quantile(0.25)
 
-# ---------- Scatter 1: Y = Calidad ----------
-st.subheader("📍 Stock vs Calidad de Producto (Destacando SKUs en Riesgo)")
+fidelidad_riesgo = df_fidelidad[
+    (df_fidelidad["Stock_Actual"] > stock_p75) &
+    (df_fidelidad["Satisfaccion_NPS"] < nps_p25)
+].copy()
+
+# ==========================================
+# 📍 Scatter: Stock vs Calidad
+# ==========================================
+st.subheader("📍 Stock vs Calidad del Producto (SKUs en Riesgo)")
 
 fig1, ax1 = plt.subplots(figsize=(10,6))
 
-# Scatter normal (azul)
+# Scatter normal
 ax1.scatter(
     df_fidelidad.loc[~df_fidelidad.index.isin(fidelidad_riesgo.index), "Stock_Actual"],
     df_fidelidad.loc[~df_fidelidad.index.isin(fidelidad_riesgo.index), "Calidad_Producto"],
@@ -742,8 +768,8 @@ ax1.scatter(
     label="Normal"
 )
 
-# Scatter SKUs en riesgo (rojo)
-if len(fidelidad_riesgo) > 0:
+# Scatter SKUs en riesgo
+if not fidelidad_riesgo.empty:
     ax1.scatter(
         fidelidad_riesgo["Stock_Actual"],
         fidelidad_riesgo["Calidad_Producto"],
@@ -751,11 +777,10 @@ if len(fidelidad_riesgo) > 0:
         s=80,
         edgecolors='black',
         linewidth=1.2,
-        label=f'En Riesgo ({len(fidelidad_riesgo)} SKUs)'
+        label=f'En Riesgo ({len(fidelidad_riesgo)})'
     )
 
-# Línea de referencia de stock alto
-ax1.axvline(x=stock_p75, color='green', linestyle='--', alpha=0.7, label=f'Stock Alto ({stock_p75:.0f})')
+ax1.axvline(x=stock_p75, color='green', linestyle='--', label=f'Stock Alto ({stock_p75:.0f})')
 
 ax1.set_xlabel("Stock Actual")
 ax1.set_ylabel("Calidad del Producto (Rating Promedio)")
@@ -765,12 +790,14 @@ ax1.grid(True, alpha=0.3)
 
 st.pyplot(fig1)
 
-# ---------- Scatter 2: Y = Precio ----------
-st.subheader("📍 Stock vs Precio Unitario (Destacando SKUs en Riesgo)")
+# ==========================================
+# 📍 Scatter: Stock vs Precio
+# ==========================================
+st.subheader("📍 Stock vs Precio Unitario (SKUs en Riesgo)")
 
 fig2, ax2 = plt.subplots(figsize=(10,6))
 
-# Scatter normal (azul)
+# Scatter normal
 ax2.scatter(
     df_fidelidad.loc[~df_fidelidad.index.isin(fidelidad_riesgo.index), "Stock_Actual"],
     df_fidelidad.loc[~df_fidelidad.index.isin(fidelidad_riesgo.index), "Precio_Unitario"],
@@ -780,8 +807,8 @@ ax2.scatter(
     label="Normal"
 )
 
-# Scatter SKUs en riesgo (rojo)
-if len(fidelidad_riesgo) > 0:
+# Scatter SKUs en riesgo
+if not fidelidad_riesgo.empty:
     ax2.scatter(
         fidelidad_riesgo["Stock_Actual"],
         fidelidad_riesgo["Precio_Unitario"],
@@ -789,11 +816,10 @@ if len(fidelidad_riesgo) > 0:
         s=80,
         edgecolors='black',
         linewidth=1.2,
-        label=f'En Riesgo ({len(fidelidad_riesgo)} SKUs)'
+        label=f'En Riesgo ({len(fidelidad_riesgo)})'
     )
 
-# Línea de referencia de stock alto
-ax2.axvline(x=stock_p75, color='green', linestyle='--', alpha=0.7, label=f'Stock Alto ({stock_p75:.0f})')
+ax2.axvline(x=stock_p75, color='green', linestyle='--', label=f'Stock Alto ({stock_p75:.0f})')
 
 ax2.set_xlabel("Stock Actual")
 ax2.set_ylabel("Precio Unitario (USD)")
@@ -803,4 +829,21 @@ ax2.grid(True, alpha=0.3)
 
 st.pyplot(fig2)
 
+# ==========================================
+# 📦 Boxplot: Calidad por Categoría
+# ==========================================
+st.subheader("📦 Distribución de Calidad por Categoría")
+
+fig3, ax3 = plt.subplots(figsize=(10,6))
+sns.boxplot(
+    data=df_fidelidad,
+    x="Categoria",
+    y="Calidad_Producto",
+    palette="pastel"
+)
+ax3.set_xlabel("Categoría")
+ax3.set_ylabel("Calidad del Producto (Rating Promedio)")
+ax3.set_title("Boxplot de Calidad por Categoría")
+ax3.tick_params(axis='x', rotation=45)
+st.pyplot(fig3)
 
