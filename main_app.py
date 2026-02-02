@@ -555,10 +555,7 @@ df_riesgo["Dias_Ultima_Revision"] = (pd.Timestamp.today() - df_riesgo["Ultima_Re
 # Riesgo = Tickets x (Días desde última revisión)
 df_riesgo["Riesgo"] = df_riesgo["Tickets_Abiertos"] * (df_riesgo["Dias_Ultima_Revision"] + 1)
 
-# Evitar NaN o tipos incorrectos
-df_riesgo["Tickets_Abiertos"] = df_riesgo["Tickets_Abiertos"].fillna(0).astype(float)
-df_riesgo["Stock_Total"] = df_riesgo["Stock_Total"].fillna(0).astype(float)
-df_riesgo["Riesgo"] = df_riesgo["Riesgo"].fillna(0).astype(float)
+
 
 # -----------------------------------------
 # Visualización avanzada: Scatter plot
