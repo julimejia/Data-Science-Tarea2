@@ -349,63 +349,63 @@ if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" 
     )
 
 # =============================================================================
-# ========================= FASE 2.1 – Variables Derivadas ===============================
+# ========================= FASE 2.1 – Variables Derivadas ====================
 # =============================================================================
-# Unimos costo unitario desde inventario
-merged = merged.merge(
-    inv[["SKU_ID", "Costo_Unitario"]],
-    on="SKU_ID",
-    how="left"
-)
 
-merged["Costo_Unitario"] = merged["Costo_Unitario"].fillna(0)
 
-merged["costo_total"] = merged["Cantidad_Vendida"] * merged["Costo_Unitario"]
-merged["margen_utilidad"] = merged["ingreso"] - merged["costo_total"]
+merged["Ingreso"] = merged["Cantidad_Vendida"] * merged["Precio_Venta_Final"]
 
-merged["margen_pct"] = merged.apply(
-    lambda x: x["margen_utilidad"] / x["ingreso"] if x["ingreso"] > 0 else 0,
+merged["Costo_Unitario_USD"] = merged["Costo_Unitario_USD"].fillna(0)
+merged["Costo_Envio"] = merged["Costo_Envio"].fillna(0)
+
+merged["Costo_Total"] = (
+    merged["Cantidad_Vendida"] * merged["Costo_Unitario_USD"]
+) + merged["Costo_Envio"]
+
+merged["Margen_Utilidad"] = merged["Ingreso"] - merged["Costo_Total"]
+
+merged["Margen_Pct"] = merged.apply(
+    lambda x: x["Margen_Utilidad"] / x["Ingreso"] if x["Ingreso"] > 0 else 0,
     axis=1
 )
 
-merged["Fecha_Entrega_Prometida"] = pd.to_datetime(
-    merged["Fecha_Entrega_Prometida"], errors="coerce"
+merged["Brecha_Entrega_Dias"] = (
+    merged["Tiempo_Entrega_Real"] - merged["Lead_Time_Dias"]
 )
-merged["Fecha_Entrega_Real"] = pd.to_datetime(
-    merged["Fecha_Entrega_Real"], errors="coerce"
-)
+merged["Ticket_Soporte_Abierto"] = merged["Ticket_Soporte_Abierto"].fillna(0)
 
-merged["brecha_entrega_dias"] = (
-    merged["Fecha_Entrega_Real"] - merged["Fecha_Entrega_Prometida"]
-).dt.days
-
-# Asumimos columna Categoria y Ticket_Soporte (0/1)
-soporte_categoria = (
+ratio_soporte_categoria = (
     merged.groupby("Categoria")
     .agg(
-        tickets_soporte=("Ticket_Soporte", "sum"),
-        transacciones=("SKU_ID", "count")
+        tickets_soporte=("Ticket_Soporte_Abierto", "sum"),
+        transacciones=("Transaccion_ID", "count")
     )
     .reset_index()
 )
 
-soporte_categoria["ratio_soporte"] = (
-    soporte_categoria["tickets_soporte"] /
-    soporte_categoria["transacciones"]
+ratio_soporte_categoria["Ratio_Soporte"] = (
+    ratio_soporte_categoria["tickets_soporte"] /
+    ratio_soporte_categoria["transacciones"]
 )
 
-merged["riesgo_operativo"] = (
+merged["Riesgo_Operativo"] = (
     (merged["sku_status"] == "FANTASMA") |
-    (merged["margen_utilidad"] < 0) |
-    (merged["brecha_entrega_dias"] > 3)
+    (merged["Margen_Utilidad"] < 0) |
+    (merged["Brecha_Entrega_Dias"] > 2) |
+    (merged["Ticket_Soporte_Abierto"] == 1)
 ).astype(int)
 
-merged["health_score_transaccion"] = 100
+merged["Health_Score"] = 100
 
-merged.loc[merged["sku_status"] == "FANTASMA", "health_score_transaccion"] -= 40
-merged.loc[merged["margen_utilidad"] < 0, "health_score_transaccion"] -= 30
-merged.loc[merged["brecha_entrega_dias"] > 3, "health_score_transaccion"] -= 20
+merged.loc[merged["sku_status"] == "FANTASMA", "Health_Score"] -= 40
+merged.loc[merged["Margen_Utilidad"] < 0, "Health_Score"] -= 30
+merged.loc[merged["Brecha_Entrega_Dias"] > 2, "Health_Score"] -= 20
+merged.loc[merged["Ticket_Soporte_Abierto"] == 1, "Health_Score"] -= 10
 
-merged["health_score_transaccion"] = merged["health_score_transaccion"].clip(0, 100)
+merged["Health_Score"] = merged["Health_Score"].clip(0, 100)
+
+
+
+
 
 
