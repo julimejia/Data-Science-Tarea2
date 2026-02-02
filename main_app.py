@@ -757,7 +757,7 @@ fb["Transaccion_ID"] = fb["Transaccion_ID"].astype(str).str.strip()
 # Merge 1: Transacciones + Inventario (para traer bodega y fecha de revisión)
 # ---------------------------------------------------
 trx_inv = trx.merge(
-    inv[["SKU_ID","bodega_origen","fecha_ultima_revision"]],
+    inv[["SKU_ID","Bodega_Origen","ultima_revision"]],
     on="SKU_ID",
     how="left"
 )
@@ -771,55 +771,3 @@ trx_inv_fb = trx_inv.merge(
     how="left"
 )
 
-# ---------------------------------------------------
-# Cálculo de Antigüedad de Revisión
-# ---------------------------------------------------
-trx_inv_fb["Fecha_Ultima_Revision"] = pd.to_datetime(trx_inv_fb["Fecha_Ultima_Revision"], errors="coerce")
-trx_inv_fb["Antiguedad_Revision_Dias"] = (pd.Timestamp.today() - trx_inv_fb["Fecha_Ultima_Revision"]).dt.days
-
-# Fill NA para tickets y satisfacción
-trx_inv_fb["Ticket_Soporte_Abierto"] = trx_inv_fb["Ticket_Soporte_Abierto"].fillna(0)
-trx_inv_fb["Satisfaccion_NPS"] = trx_inv_fb["Satisfaccion_NPS"].fillna(0)
-
-# ---------------------------------------------------
-# Agrupar por Bodega
-# ---------------------------------------------------
-bodega_summary = trx_inv_fb.groupby("Bodega_Origen").agg(
-    Antiguedad_Revision_Prom=("Antiguedad_Revision_Dias","mean"),
-    Tasa_Tickets=("Ticket_Soporte_Abierto","mean"),
-    Satisfaccion_Prom=("Satisfaccion_NPS","mean"),
-    Num_Transacciones=("Transaccion_ID","count")
-).reset_index()
-
-# ---------------------------------------------------
-# Visualización Scatter
-# ---------------------------------------------------
-st.subheader("👁️ Riesgo Operativo por Bodega: Antigüedad de Revisión vs Tasa de Tickets")
-
-fig, ax = plt.subplots(figsize=(10,6))
-sc = ax.scatter(
-    bodega_summary["Antiguedad_Revision_Prom"],
-    bodega_summary["Tasa_Tickets"],
-    s=bodega_summary["Num_Transacciones"]*5,  # tamaño burbuja según volumen
-    c=bodega_summary["Satisfaccion_Prom"],      # color según satisfacción
-    cmap="RdYlGn_r",
-    alpha=0.8,
-    edgecolors='black'
-)
-
-for i, row in bodega_summary.iterrows():
-    ax.text(row["Antiguedad_Revision_Prom"]+0.5, row["Tasa_Tickets"]+0.005, row["Bodega_Origen"], fontsize=8)
-
-ax.set_xlabel("Antigüedad Promedio de Última Revisión (días)")
-ax.set_ylabel("Tasa de Tickets de Soporte Abierto")
-ax.set_title("Bodegas Operando a Ciegas y su Impacto en Satisfacción")
-cbar = plt.colorbar(sc)
-cbar.set_label("Satisfacción NPS Promedio")
-ax.grid(True, alpha=0.3)
-st.pyplot(fig)
-
-# ---------------------------------------------------
-# Tabla de resumen por bodega
-# ---------------------------------------------------
-st.subheader("📋 Resumen por Bodega")
-st.dataframe(bodega_summary.sort_values("Tasa_Tickets", ascending=False))
