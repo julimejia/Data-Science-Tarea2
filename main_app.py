@@ -357,7 +357,10 @@ if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" 
     merged["Costo_Total"] = (merged["Cantidad_Vendida"] * merged["Costo_Unitario_USD"]) + merged["Costo_Envio"]
     merged["Margen_Utilidad"] = merged["Ingreso"] - merged["Costo_Total"]
     merged["Margen_Pct"] = merged.apply(lambda x: x["Margen_Utilidad"]/x["Ingreso"] if x["Ingreso"]>0 else 0, axis=1)
+    merged["Tiempo_Entrega_Real"] = pd.to_numeric(merged["Tiempo_Entrega_Real"], errors="coerce").fillna(0)
+    merged["Lead_Time_Dias"] = pd.to_numeric(merged["Lead_Time_Dias"], errors="coerce").fillna(0)
     merged["Brecha_Entrega_Dias"] = merged["Tiempo_Entrega_Real"] - merged["Lead_Time_Dias"]
+
 
     # Riesgo operativo
     merged["Riesgo_Operativo"] = (
