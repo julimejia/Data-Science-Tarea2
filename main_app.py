@@ -508,16 +508,19 @@ ax.set_ylabel("Ingreso (USD)")
 ax.set_title("Impacto financiero por tipo de SKU")
 st.pyplot(fig)
 
-# ---------- 4. Diagnóstico de Fidelidad ----------
-# ---------- 4️⃣ Diagnóstico de Fidelidad ----------
-st.subheader("4️⃣ Diagnóstico de Fidelidad por Categoría")
 
-# Normalizar nombres de categorías
+# ---------- 4️⃣ Diagnóstico de Fidelidad ----------
+st.subheader("4️⃣ Diagnóstico de Fidelidad: Stock Alto vs. Satisfacción Baja")
+
+# Normalizar nombres de categorías (manteniendo tu lógica)
 inv["Categoria"] = inv["Categoria"].str.lower().str.replace("-", "").str.strip()
-# Ejemplo: unificar smart-phone y smartphones
 inv["Categoria"] = inv["Categoria"].replace({
     "smartphone": "smartphone",
-    "smartphones": "smartphone"
+    "smartphones": "smartphone",
+    # Agrega más unificaciones según tu data
+    "laptop": "laptop",
+    "notebook": "laptop",
+    "pc": "computadora"
 })
 
 # Merge con feedback por SKU
@@ -527,48 +530,176 @@ df_fidelidad = inv.merge(
     how="left"
 )
 
-# Filtrar SKUs con stock alto y NPS bajo
-stock_median = df_fidelidad["Stock_Actual"].median()
+# Filtrar SKUs con stock alto y NPS bajo (usando percentil para más precisión)
+stock_p75 = df_fidelidad["Stock_Actual"].quantile(0.75)  # Top 25% stock más alto
+nps_p25 = df_fidelidad["Satisfaccion_NPS"].quantile(0.25)  # Bottom 25% NPS más bajo
+
 fidelidad_riesgo = df_fidelidad[
-    (df_fidelidad["Stock_Actual"] > stock_median) & 
-    (df_fidelidad["Satisfaccion_NPS"] < 50)
+    (df_fidelidad["Stock_Actual"] > stock_p75) & 
+    (df_fidelidad["Satisfaccion_NPS"] < nps_p25)
 ]
 
-# Métricas
-st.metric("SKUs con stock alto pero NPS bajo", len(fidelidad_riesgo))
+# Métricas KPI mejoradas
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    st.metric("SKUs en Riesgo", len(fidelidad_riesgo))
+with col2:
+    st.metric("Stock Atrapado", 
+              f"${fidelidad_riesgo['Stock_Actual'].sum():,.0f}",
+              delta=f"{len(fidelidad_riesgo)/len(df_fidelidad)*100:.1f}% del total")
+with col3:
+    st.metric("NPS Promedio Riesgo", 
+              f"{fidelidad_riesgo['Satisfaccion_NPS'].mean():.0f}")
+with col4:
+    riesgo_por_cat = fidelidad_riesgo.groupby("Categoria").size().max()
+    st.metric("Categoría Más Problemática", 
+              fidelidad_riesgo.groupby("Categoria").size().idxmax().capitalize())
 
-# Agrupar por categoría para mostrar resumen
+# Agrupar por categoría con métricas más completas
 categoria_summary = fidelidad_riesgo.groupby("Categoria").agg({
     "SKU_ID": "count",
-    "Stock_Actual": "sum",
-    "Satisfaccion_NPS": "mean"
-}).reset_index().rename(columns={"SKU_ID": "Cantidad_SKU"})
-st.dataframe(categoria_summary.sort_values("Cantidad_SKU", ascending=False))
+    "Stock_Actual": ["sum", "mean"],
+    "Satisfaccion_NPS": ["mean", "min"],
+    "Precio_Unitario": "mean"
+}).reset_index()
 
-# Scatter plot: Stock vs NPS, por categoría
-fig, ax = plt.subplots(figsize=(10,5))
+# Aplanar columnas multi-index
+categoria_summary.columns = ['Categoria', 'Cantidad_SKU', 'Stock_Total', 
+                            'Stock_Promedio', 'NPS_Promedio', 'NPS_Minimo', 
+                            'Precio_Promedio']
 
-# Usamos colores diferentes para cada categoría
-categorias = fidelidad_riesgo["Categoria"].unique()
-colors = plt.cm.tab20.colors  # paleta de colores
+# Ordenar por riesgo (más SKUs primero, luego peor NPS)
+categoria_summary = categoria_summary.sort_values(
+    ["Cantidad_SKU", "NPS_Promedio"], 
+    ascending=[False, True]
+)
 
-for i, cat in enumerate(categorias):
-    subset = fidelidad_riesgo[fidelidad_riesgo["Categoria"] == cat]
-    ax.scatter(
-        subset["Stock_Actual"], 
-        subset["Satisfaccion_NPS"], 
-        s=50, 
-        color=colors[i % len(colors)], 
-        alpha=0.7,
-        label=cat.capitalize(),
-        edgecolor="black"
-    )
+# Formatear valores para mejor visualización
+categoria_summary["Stock_Total"] = categoria_summary["Stock_Total"].apply(lambda x: f"{x:,.0f}")
+categoria_summary["Precio_Promedio"] = categoria_summary["Precio_Promedio"].apply(lambda x: f"${x:,.2f}")
 
-ax.set_xlabel("Stock Actual")
-ax.set_ylabel("Satisfacción NPS")
-ax.set_title("Paradoja: Stock Alto vs Sentimiento Negativo por Categoría")
-ax.legend(title="Categoría", bbox_to_anchor=(1.05, 1), loc="upper left")
+st.subheader("📋 Categorías Críticas para Revisión")
+st.dataframe(
+    categoria_summary,
+    use_container_width=True,
+    hide_index=True
+)
+
+# ---- GRÁFICO MEJORADO: Matriz de Cuadrantes ----
+st.subheader("📍 Matriz de Riesgo: Stock vs Satisfacción")
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+# 1. Scatter Plot con más información
+scatter = ax1.scatter(
+    df_fidelidad["Stock_Actual"],
+    df_fidelidad["Satisfaccion_NPS"],
+    c=df_fidelidad["Precio_Unitario"],
+    cmap="viridis",
+    alpha=0.6,
+    s=50,
+    edgecolors='k',
+    linewidth=0.5
+)
+
+# Líneas de referencia (umbrales)
+ax1.axhline(y=nps_p25, color='r', linestyle='--', alpha=0.5, label=f'NPS Bajo (<{nps_p25:.0f})')
+ax1.axvline(x=stock_p75, color='orange', linestyle='--', alpha=0.5, label=f'Stock Alto (>${stock_p75:,.0f})')
+
+# Destacar los de riesgo con círculo rojo
+riesgo_points = ax1.scatter(
+    fidelidad_riesgo["Stock_Actual"],
+    fidelidad_riesgo["Satisfaccion_NPS"],
+    s=100,
+    facecolors='none',
+    edgecolors='red',
+    linewidth=2,
+    label=f'Riesgo ({len(fidelidad_riesgo)} SKUs)'
+)
+
+ax1.set_xlabel("Stock Actual (unidades)")
+ax1.set_ylabel("Satisfacción NPS")
+ax1.set_title("Stock vs. Satisfacción (Color = Precio)")
+ax1.legend()
+ax1.grid(True, alpha=0.3)
+
+# Barra de color para precio
+plt.colorbar(scatter, ax=ax1, label='Precio Unitario ($)')
+
+# 2. Gráfico de barras por categoría (TOP 5 más problemáticas)
+top_categorias = categoria_summary.head(5)
+bars = ax2.barh(
+    top_categorias["Categoria"].str.capitalize(),
+    top_categorias["Cantidad_SKU"].astype(int),
+    color=['#ff6b6b', '#ff9e6d', '#ffd166', '#06d6a0', '#118ab2']
+)
+
+# Añadir etiquetas
+for bar, nps in zip(bars, top_categorias["NPS_Promedio"]):
+    width = bar.get_width()
+    ax2.text(width + 0.5, bar.get_y() + bar.get_height()/2, 
+             f'NPS: {float(nps):.0f}', 
+             va='center', fontweight='bold')
+
+ax2.set_xlabel("Número de SKUs en Riesgo")
+ax2.set_title("Top 5 Categorías más Problemáticas")
+ax2.invert_yaxis()  # La categoría con más SKUs arriba
+
+plt.tight_layout()
 st.pyplot(fig)
 
+# ---- RECOMENDACIONES ACCIONABLES ----
+st.subheader("🎯 Recomendaciones por Categoría")
+
+if not categoria_summary.empty:
+    # Tomar la categoría más crítica
+    top_cat = categoria_summary.iloc[0]
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.info(f"**Categoría más crítica:** {top_cat['Categoria'].capitalize()}")
+        st.write(f"- **{top_cat['Cantidad_SKU']} SKUs** en riesgo")
+        st.write(f"- **NPS promedio:** {top_cat['NPS_Promedio']}")
+        st.write(f"- **Stock total comprometido:** {top_cat['Stock_Total']} unidades")
+        
+        # Diagnóstico rápido basado en precio
+        precio_prom = float(top_cat['Precio_Promedio'].replace('$', '').replace(',', ''))
+        if precio_prom > 500:
+            st.warning("⚠️ **Posible sobrecosto:** Precio promedio alto con baja satisfacción")
+        else:
+            st.error("🚨 **Posible mala calidad:** Precio bajo pero insatisfacción alta")
+    
+    with col2:
+        st.success("**Acciones recomendadas:**")
+        
+        # Acciones según el diagnóstico
+        acciones = [
+            "1. **Revisar políticas de precios** para esta categoría",
+            "2. **Analizar reseñas específicas** de estos SKUs",
+            "3. **Comparar con competencia** en precio/calidad",
+            "4. **Considerar promociones** para liquidar stock problemático",
+            "5. **Evaluar reemplazo** por productos mejor valorados"
+        ]
+        
+        for accion in acciones:
+            st.write(accion)
+        
+        # Sugerencia de gráfico adicional
+        st.markdown("---")
+        st.caption("**Para profundizar:** Considera un gráfico de series temporales para ver si la insatisfacción es reciente o crónica.")
+
+# ---- BOTÓN PARA EXPORTAR ----
+if st.button("📥 Exportar Reporte de Riesgo"):
+    # Convertir a CSV
+    csv = fidelidad_riesgo[['SKU_ID', 'Categoria', 'Stock_Actual', 
+                           'Satisfaccion_NPS', 'Precio_Unitario']].to_csv(index=False)
+    
+    st.download_button(
+        label="Descargar CSV con SKUs en riesgo",
+        data=csv,
+        file_name="skus_riesgo_fidelidad.csv",
+        mime="text/csv"
+    )
 
 # ---------- 5. Storytelling Riesgo Operativo Mejorado ----------
