@@ -616,15 +616,16 @@ if not fidelidad_riesgo.empty:
 
     st.info("Asegúrate de tener cargados los datasets de Inventario Central y Feedback de Clientes.") 
 
-st.subheader("📍 Matriz de Riesgo: Stock vs Satisfacción")
 
-
-# Aseguramos que las columnas existan
+# ---------- Asegurar que las columnas existan ----------
 for col in ["Stock_Actual", "Satisfaccion_NPS", "Calidad_Producto", "Precio_Unitario"]:
     if col not in df_fidelidad.columns:
-        df_fidelidad[col] = 0  # Placeholder si faltan
+        df_fidelidad[col] = 0  # Placeholder si falta
 
-
+# También asegurarnos que fidelidad_riesgo tenga esas columnas
+for col in ["Stock_Actual", "Satisfaccion_NPS", "Calidad_Producto", "Precio_Unitario"]:
+    if col not in fidelidad_riesgo.columns:
+        fidelidad_riesgo[col] = df_fidelidad[col]
 
 # ---------- Scatter 1: Y = Calidad ----------
 st.subheader("📍 Stock vs Calidad de Producto (Destacando SKUs en Riesgo)")
@@ -653,7 +654,7 @@ if len(fidelidad_riesgo) > 0:
         label=f'En Riesgo ({len(fidelidad_riesgo)} SKUs)'
     )
 
-# Líneas de referencia
+# Línea de referencia de stock alto
 ax1.axvline(x=stock_p75, color='green', linestyle='--', alpha=0.7, label=f'Stock Alto ({stock_p75:.0f})')
 
 ax1.set_xlabel("Stock Actual")
@@ -691,7 +692,7 @@ if len(fidelidad_riesgo) > 0:
         label=f'En Riesgo ({len(fidelidad_riesgo)} SKUs)'
     )
 
-# Líneas de referencia
+# Línea de referencia de stock alto
 ax2.axvline(x=stock_p75, color='green', linestyle='--', alpha=0.7, label=f'Stock Alto ({stock_p75:.0f})')
 
 ax2.set_xlabel("Stock Actual")
@@ -701,4 +702,5 @@ ax2.legend()
 ax2.grid(True, alpha=0.3)
 
 st.pyplot(fig2)
+
 
