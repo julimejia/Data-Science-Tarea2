@@ -770,6 +770,10 @@ trx_inv_fb = trx_inv.merge(
 trx_inv_fb["Ultima_Revision"] = pd.to_datetime(trx_inv_fb["Ultima_Revision"], errors="coerce")
 trx_inv_fb["Antiguedad_Revision_Dias"] = (pd.Timestamp.today() - trx_inv_fb["Ultima_Revision"]).dt.days
 
+# Forzar a numérico las columnas que se promedian
+for col in ["Antiguedad_Revision_Dias", "Ticket_Soporte_Abierto", "Satisfaccion_NPS"]:
+    trx_inv_fb[col] = pd.to_numeric(trx_inv_fb[col], errors="coerce")
+
 # Fill NA para tickets y satisfacción
 trx_inv_fb["Ticket_Soporte_Abierto"] = trx_inv_fb["Ticket_Soporte_Abierto"].fillna(0)
 trx_inv_fb["Satisfaccion_NPS"] = trx_inv_fb["Satisfaccion_NPS"].fillna(0)
