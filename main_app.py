@@ -511,35 +511,71 @@ st.pyplot(fig)
 
 # ---------- 4️⃣ Diagnóstico de Fidelidad ----------
 
-st.subheader("4️⃣ Diagnóstico de Fidelidad Simplificado")
+# ---------- 4️⃣ Diagnóstico de Fidelidad Mejorado ----------
 
-# Solo usar columnas básicas que sabemos que existen
+st.subheader("4️⃣ Diagnóstico de Fidelidad – Análisis por Categoría")
+
 try:
-    # Lista de columnas disponibles
-    st.write("Columnas disponibles:", list(df_fidelidad.columns))
-    
-    # Filtro simple
-    fidelidad_riesgo_simple = df_fidelidad[
-        (df_fidelidad["Stock_Actual"] > df_fidelidad["Stock_Actual"].median()) &
-        (df_fidelidad["Satisfaccion_NPS"] < 50)  # NPS menor a 50
+    # Verificar datasets
+    if "Inventario Central" not in datasets_disponibles or "Feedback de Clientes" not in datasets_disponibles:
+        raise ValueError("Faltan datasets de Inventario o Feedback para análisis de fidelidad")
+
+    inv = datasets["Inventario Central"]["clean"].copy()
+    fb = datasets["Feedback de Clientes"]["clean"].copy()
+
+    # Normalizar columnas y tipos
+    inv["Categoria"] = inv["Categoria"].str.lower().str.replace("-", "").str.strip()
+    fb["SKU_ID"] = fb["SKU_ID"].astype(str).str.strip()
+    inv["SKU_ID"] = inv["SKU_ID"].astype(str).str.strip()
+
+    # Merge Feedback + Inventario
+    df_fidelidad = fb.groupby("SKU_ID")[["Satisfaccion_NPS"]].mean().reset_index()
+    df_fidelidad = df_fidelidad.merge(
+        inv[["SKU_ID","Categoria","Stock_Actual"]],
+        on="SKU_ID",
+        how="left"
+    )
+
+    # Agrupar por Categoría
+    df_fidelidad_cat = df_fidelidad.groupby("Categoria").agg({
+        "Stock_Actual": "sum",
+        "Satisfaccion_NPS": "mean"
+    }).reset_index()
+
+    # Detectar categorías de riesgo (stock alto pero NPS bajo)
+    stock_med = df_fidelidad_cat["Stock_Actual"].median()
+    riesgo_fidelidad = df_fidelidad_cat[
+        (df_fidelidad_cat["Stock_Actual"] > stock_med) &
+        (df_fidelidad_cat["Satisfaccion_NPS"] < 50)
     ]
-    
-    st.metric("SKUs problemáticos", len(fidelidad_riesgo_simple))
-    
-    # Tabla simple
-    if len(fidelidad_riesgo_simple) > 0:
-        st.dataframe(fidelidad_riesgo_simple[["SKU_ID", "Categoria", "Stock_Actual", "Satisfaccion_NPS"]])
-    
-    # Gráfico simple
-    fig, ax = plt.subplots()
-    ax.scatter(df_fidelidad["Stock_Actual"], df_fidelidad["Satisfaccion_NPS"])
-    ax.set_xlabel("Stock")
-    ax.set_ylabel("NPS")
+
+    st.metric("Categorías con stock alto y NPS bajo", len(riesgo_fidelidad))
+
+    # Tabla de riesgo
+    if not riesgo_fidelidad.empty:
+        st.dataframe(riesgo_fidelidad[["Categoria","Stock_Actual","Satisfaccion_NPS"]])
+
+    # Gráfico bubble chart
+    fig, ax = plt.subplots(figsize=(10,5))
+    scatter = ax.scatter(
+        df_fidelidad_cat["Categoria"],
+        df_fidelidad_cat["Satisfaccion_NPS"],
+        s=(df_fidelidad_cat["Stock_Actual"]/10).clip(lower=50),
+        c=df_fidelidad_cat["Satisfaccion_NPS"],
+        cmap="RdYlGn_r",
+        alpha=0.7,
+        edgecolor="black"
+    )
+    ax.set_xlabel("Categoría")
+    ax.set_ylabel("NPS Promedio")
+    ax.set_title("Diagnóstico de Fidelidad: Stock vs NPS por Categoría")
+    plt.xticks(rotation=45, ha="right")
+    cbar = plt.colorbar(scatter)
+    cbar.set_label("NPS Promedio")
     st.pyplot(fig)
-    
+
 except Exception as e:
-    st.error(f"Error: {str(e)}")
-    st.write("Usando datos de ejemplo para continuar...")
-    # Datos de ejemplo para que no falle
-    st.write("Ejemplo de cómo se verían los resultados")
+    st.error(f"Error al generar diagnóstico de fidelidad: {str(e)}")
+    st.info("Asegúrate de tener cargados los datasets de Inventario Central y Feedback de Clientes.")
+
 # ---------- 5. Storytelling Riesgo Operativo Mejorado ----------
