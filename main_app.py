@@ -770,7 +770,7 @@ trx_inv_fb = trx_inv.merge(
 # ---------------------------------------------------
 # Cálculo de Antigüedad de Revisión
 # ---------------------------------------------------
-trx_inv_fb["Fecha_Ultima_Revision"] = pd.to_datetime(trx_inv_fb["Fecha_Ultima_Revision"], errors="coerce")
+trx_inv_fb["Fecha_Ultima_Revision"] = pd.to_datetime(trx_inv_fb["Ultima_Revision"], errors="coerce")
 trx_inv_fb["Antiguedad_Revision_Dias"] = (pd.Timestamp.today() - trx_inv_fb["Fecha_Ultima_Revision"]).dt.days
 
 # Fill NA para tickets y satisfacción
