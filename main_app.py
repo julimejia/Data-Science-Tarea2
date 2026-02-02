@@ -113,25 +113,29 @@ def cargar_inventario(file):
 
     # 3. Imputar Stock_Actual negativo donde Costo_Unitario_USD está en rango razonable
     if "Categoria" in df_limpio.columns and "Costo_Unitario_USD" in df_limpio.columns:
+        # Calcular mediana de stock positivo por categoría
         median_stock = (
             df_limpio["Stock_Actual"]
-            .where(df_limpio["Stock_Actual"] >= 0)  # negivos -> NaN
+            .where(df_limpio["Stock_Actual"] >= 0)  # negativos -> NaN
             .groupby(df_limpio["Categoria"])
             .transform("median")
         )
         
+        # Calcular IQR de costo por categoría
         q1_costo = df_limpio.groupby("Categoria")["Costo_Unitario_USD"].transform(lambda s: s.quantile(0.25))
         q3_costo = df_limpio.groupby("Categoria")["Costo_Unitario_USD"].transform(lambda s: s.quantile(0.75))
         
+        # Imputar donde stock<0 Y costo está en rango Q1-Q3
         mask_imputar = (df_limpio["Stock_Actual"] < 0) & (df_limpio["Costo_Unitario_USD"].between(q1_costo, q3_costo, inclusive="both"))
         df_limpio.loc[mask_imputar, "Stock_Actual"] = median_stock[mask_imputar]
+        filas_eliminadas += mask_imputar.isna().sum()  # Contar las que no pudieron imputarse
 
     # 4. Eliminar stock negativo residual
     mask_stock_neg = df_limpio["Stock_Actual"] < 0
     filas_eliminadas += mask_stock_neg.sum()
     df_limpio = df_limpio[~mask_stock_neg]
 
-    return df, df_limpio, filas_eliminadas
+    return df, df_limpio, int(filas_eliminadas)
 
 def cargar_transacciones(file):
     """
@@ -161,12 +165,17 @@ def cargar_transacciones(file):
         mask2 = (df_limpio["Cantidad_Vendida"] < 0) & (df_limpio["Tiempo_Entrega_Real"] > 100)
         df_limpio = df_limpio[~mask2]
     
-    # 4. Filtrar transacciones con fecha futura
+    # 4. Eliminar cantidades negativas residuales
+    if "Cantidad_Vendida" in df_limpio.columns:
+        mask_qty_neg = df_limpio["Cantidad_Vendida"] < 0
+        df_limpio = df_limpio[~mask_qty_neg]
+    
+    # 5. Filtrar transacciones con fecha futura
     if "Fecha_Venta" in df_limpio.columns:
         df_limpio = df_limpio[df_limpio["Fecha_Venta"] <= pd.Timestamp.now()]
     
     filas_eliminadas = filas_originales - len(df_limpio)
-    return df, df_limpio, filas_eliminadas
+    return df, df_limpio, int(filas_eliminadas)
 
 # =============================================================================
 # HEALTHCHECK – CONTROL DE CALIDAD DE DATOS (PROFUNDO)
