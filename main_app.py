@@ -822,3 +822,68 @@ st.pyplot(fig)
 # ---------------------------------------------------
 st.subheader("📋 Resumen por Bodega")
 st.dataframe(bodega_summary.sort_values("Tasa_Tickets", ascending=False))
+
+# ---------------------------------------------------
+# Análisis con Groq (LLM)
+# ---------------------------------------------------
+st.subheader("🧠 Análisis con Groq")
+st.caption("Ingresa tu API key de Groq para generar un análisis automático del comportamiento por bodega.")
+
+groq_api_key = st.text_input("GROQ API KEY", type="password", help="Tu clave se usa solo en esta sesión.")
+groq_model = st.selectbox(
+    "Modelo",
+    ["llama-3.3-70b-versatile", "openai/gpt-oss-20b"],
+    index=0
+)
+analisis_prompt = st.text_area(
+    "Enfoque del análisis",
+    value="Analiza riesgos operativos por bodega. Señala outliers, posibles causas y acciones recomendadas.",
+    height=120
+)
+
+def _build_bodega_context(df):
+    if df.empty:
+        return "No hay datos agregados por bodega."
+    resumen = df.describe(include="all").to_string()
+    top_tickets = df.sort_values("Tasa_Tickets", ascending=False).head(5).to_string(index=False)
+    top_antig = df.sort_values("Antiguedad_Revision_Prom", ascending=False).head(5).to_string(index=False)
+    return (
+        "Resumen estadístico (bodega_summary.describe):\n"
+        f"{resumen}\n\n"
+        "Top 5 por tasa de tickets:\n"
+        f"{top_tickets}\n\n"
+        "Top 5 por antigüedad de revisión:\n"
+        f"{top_antig}\n"
+    )
+
+if st.button("Generar análisis"):
+    if not groq_api_key:
+        st.warning("Por favor ingresa tu GROQ API KEY.")
+    else:
+        try:
+            from groq import Groq
+            client = Groq(api_key=groq_api_key)
+
+            context = _build_bodega_context(bodega_summary)
+            messages = [
+                {
+                    "role": "system",
+                    "content": "Eres un analista de datos senior enfocado en operaciones y calidad de datos."
+                },
+                {
+                    "role": "user",
+                    "content": f"{analisis_prompt}\n\nDatos:\n{context}"
+                }
+            ]
+
+            with st.spinner("Generando análisis con Groq..."):
+                resp = client.chat.completions.create(
+                    model=groq_model,
+                    messages=messages,
+                    temperature=0.3,
+                    max_completion_tokens=700
+                )
+
+            st.markdown(resp.choices[0].message.content)
+        except Exception as e:
+            st.error(f"No se pudo generar el análisis con Groq: {e}")
