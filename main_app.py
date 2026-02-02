@@ -524,40 +524,52 @@ ax.set_title("Paradoja Stock Alto vs Sentimiento Negativo")
 st.pyplot(fig)
 
 # ---------- 5. Storytelling Riesgo Operativo ----------
-# ---------- 5. Storytelling Riesgo Operativo ----------
-st.subheader("5️⃣ Storytelling de Riesgo Operativo")
+# ---------- 5. Storytelling Riesgo Operativo Mejorado ----------
+st.subheader("5️⃣ Storytelling de Riesgo Operativo (Visual Avanzado)")
 
 # Merge Feedback + Inventario para asociar cada ticket con la Bodega
-fb_bodega = fb_sku.merge(inv[["SKU_ID", "Bodega_Origen"]], on="SKU_ID", how="left")
+fb_bodega = fb_sku.merge(inv[["SKU_ID", "Bodega_Origen", "Stock_Actual"]], on="SKU_ID", how="left")
 
-# Agrupar tickets por Bodega
-tickets_bodega = fb_bodega.groupby("Bodega_Origen")["Ticket_Soporte_Abierto"].sum().reset_index()
-
-# Merge con inventario para obtener Última Revisión
-df_riesgo = inv[["Bodega_Origen","Ultima_Revision"]].drop_duplicates().merge(
-    tickets_bodega, on="Bodega_Origen", how="left"
-)
+# Agrupar tickets y stock por Bodega
+df_riesgo = fb_bodega.groupby("Bodega_Origen").agg(
+    Tickets_Abiertos=("Ticket_Soporte_Abierto","sum"),
+    Stock_Total=("Stock_Actual","sum"),
+    Ultima_Revision=("Ultima_Revision","max")
+).reset_index()
 
 df_riesgo["Ultima_Revision"] = pd.to_datetime(df_riesgo["Ultima_Revision"], errors="coerce")
 df_riesgo["Dias_Ultima_Revision"] = (pd.Timestamp.today() - df_riesgo["Ultima_Revision"]).dt.days
-df_riesgo["Ticket_Soporte_Abierto"] = df_riesgo["Ticket_Soporte_Abierto"].fillna(0).astype(int)
 
-# Gráfico combinado
-if not df_riesgo.empty:
-    fig, ax1 = plt.subplots(figsize=(10,4))
-    ax1.bar(df_riesgo["Bodega_Origen"], df_riesgo["Ticket_Soporte_Abierto"], color="red", alpha=0.6, label="Tickets de Soporte")
-    ax2 = ax1.twinx()
-    ax2.plot(df_riesgo["Bodega_Origen"], df_riesgo["Dias_Ultima_Revision"], color="blue", marker="o", label="Días Última Revisión")
-    ax1.set_ylabel("Tickets de Soporte")
-    ax2.set_ylabel("Días Última Revisión")
-    ax1.set_xticklabels(df_riesgo["Bodega_Origen"], rotation=45, ha="right")
-    ax1.set_title("Riesgo Operativo: Tickets vs Antigüedad de Revisión")
-    fig.tight_layout()
-    st.pyplot(fig)
+# Colorear según riesgo: mucho tickets + mucha antigüedad = crítico
+df_riesgo["Riesgo"] = df_riesgo["Tickets_Abiertos"] * df_riesgo["Dias_Ultima_Revision"]
 
-    st.dataframe(df_riesgo[["Bodega_Origen","Dias_Ultima_Revision","Ticket_Soporte_Abierto"]])
-else:
-    st.warning("⚠️ Sin datos de bodegas para análisis de riesgo")
+# Scatter plot con storytelling
+fig, ax = plt.subplots(figsize=(10,6))
+scatter = ax.scatter(
+    df_riesgo["Dias_Ultima_Revision"], 
+    df_riesgo["Tickets_Abiertos"], 
+    s=df_riesgo["Stock_Total"]/10,  # tamaño según stock
+    c=df_riesgo["Riesgo"],          # color según riesgo
+    cmap="Reds",
+    alpha=0.7,
+    edgecolor="black"
+)
+
+# Añadir etiquetas de bodega
+for i, row in df_riesgo.iterrows():
+    ax.text(row["Dias_Ultima_Revision"]+0.5, row["Tickets_Abiertos"], row["Bodega_Origen"], fontsize=9)
+
+ax.set_xlabel("Días desde Última Revisión")
+ax.set_ylabel("Tickets de Soporte Abiertos")
+ax.set_title("Riesgo Operativo: Bodegas con Tickets vs Antigüedad (Tamaño=Stock, Color=Riesgo)")
+cbar = plt.colorbar(scatter)
+cbar.set_label("Riesgo (Tickets x Días)")
+st.pyplot(fig)
+
+# Mostrar tabla ordenada por riesgo
+st.dataframe(df_riesgo.sort_values("Riesgo", ascending=False)[[
+    "Bodega_Origen","Dias_Ultima_Revision","Tickets_Abiertos","Stock_Total","Riesgo"
+]])
 
 
 
