@@ -93,84 +93,87 @@ def cargar_feedback(file):
 def cargar_inventario(file):
     """
     Carga y limpia datos de inventario:
-    - Elimina fila con índice 500 (outlier extremo)
-    - Imputa Stock_Actual negativo usando mediana por categoría
-    - Elimina filas con múltiples inconsistencias
+    - Elimina fila con índice 500 (outlier extremo: Costo_Unitario_USD > 85000)
+    - Elimina filas con múltiples anomalías (Stock_Actual < 0 Y Lead_Time_Dias NaN)
+    - Imputa Stock_Actual negativo usando mediana por categoría cuando costo está en Q1-Q3
+    - Elimina stock negativo residual
     """
     df = pd.read_csv(file)
+    filas_originales = len(df)
     df_limpio = df.copy()
-    filas_eliminadas = 0
 
-    # 1. Eliminar fila 500
+    # 1. ELIMINAR FILA 500 (extremo outlier con Costo_Unitario_USD > 85000)
     if 500 in df_limpio.index:
         df_limpio = df_limpio.drop(index=500)
-        filas_eliminadas += 1
 
-    # 2. Identificar filas con múltiples anomalías (Stock_Actual < 0 Y Lead_Time_Dias NaN)
-    mask_multi_anomalia = (df_limpio["Stock_Actual"] < 0) & (df_limpio["Lead_Time_Dias"].isna())
-    filas_eliminadas += mask_multi_anomalia.sum()
-    df_limpio = df_limpio[~mask_multi_anomalia]
+    # 2. ELIMINAR FILAS CON MÚLTIPLES ANOMALÍAS (Stock_Actual < 0 AND Lead_Time_Dias NaN)
+    #    Estas filas tienen demasiadas inconsistencias para imputar confiablemente
+    mask_multi = (df_limpio["Stock_Actual"] < 0) & (df_limpio["Lead_Time_Dias"].isna())
+    df_limpio = df_limpio[~mask_multi]
 
-    # 3. Imputar Stock_Actual negativo donde Costo_Unitario_USD está en rango razonable
-    if "Categoria" in df_limpio.columns and "Costo_Unitario_USD" in df_limpio.columns:
-        # Calcular mediana de stock positivo por categoría
+    # 3. IMPUTAR Stock_Actual negativo con mediana por categoría
+    #    SOLO si el Costo_Unitario_USD está en el rango Q1-Q3 de su categoría
+    if "Categoria" in df_limpio.columns and "Costo_Unitario_USD" in df_limpio.columns and "Stock_Actual" in df_limpio.columns:
+        # Calcular mediana de stock positivo por categoría (excluye negativos)
         median_stock = (
             df_limpio["Stock_Actual"]
-            .where(df_limpio["Stock_Actual"] >= 0)  # negativos -> NaN
+            .where(df_limpio["Stock_Actual"] >= 0)  # negativos → NaN
             .groupby(df_limpio["Categoria"])
             .transform("median")
         )
         
-        # Calcular IQR de costo por categoría
+        # Calcular Q1 y Q3 de Costo por categoría
         q1_costo = df_limpio.groupby("Categoria")["Costo_Unitario_USD"].transform(lambda s: s.quantile(0.25))
         q3_costo = df_limpio.groupby("Categoria")["Costo_Unitario_USD"].transform(lambda s: s.quantile(0.75))
         
-        # Imputar donde stock<0 Y costo está en rango Q1-Q3
+        # Máscara: stock negativo AND costo en rango razonable (Q1-Q3)
         mask_imputar = (df_limpio["Stock_Actual"] < 0) & (df_limpio["Costo_Unitario_USD"].between(q1_costo, q3_costo, inclusive="both"))
+        
+        # Aplicar la imputación (reemplazar stock negativo con la mediana)
         df_limpio.loc[mask_imputar, "Stock_Actual"] = median_stock[mask_imputar]
-        filas_eliminadas += mask_imputar.isna().sum()  # Contar las que no pudieron imputarse
 
-    # 4. Eliminar stock negativo residual
-    mask_stock_neg = df_limpio["Stock_Actual"] < 0
-    filas_eliminadas += mask_stock_neg.sum()
-    df_limpio = df_limpio[~mask_stock_neg]
+    # 4. ELIMINAR stock negativo RESIDUAL (los que no pudieron imputarse)
+    #    Estos son valores sin mediana disponible o costo fuera de rango Q1-Q3
+    df_limpio = df_limpio[df_limpio["Stock_Actual"] >= 0]
 
+    filas_eliminadas = filas_originales - len(df_limpio)
     return df, df_limpio, int(filas_eliminadas)
 
 def cargar_transacciones(file):
     """
     Carga y limpia datos de transacciones:
-    - Parsea columnas de fecha
-    - Elimina transacciones con cantidad negativa Y costo envío NaN
-    - Elimina transacciones con cantidad negativa Y tiempo entrega > 100 días
+    - Parsea TODAS las columnas de fecha
+    - Elimina transacciones con anomalías de cantidad/costo
+    - Elimina transacciones con entregas extremadamente atrasadas
     - Filtra transacciones con fecha futura
     """
     df = pd.read_csv(file)
     filas_originales = len(df)
-    
-    # 1. Parsear fechas
-    for col in df.columns:
-        if "fecha" in col.lower():
-            df[col] = pd.to_datetime(df[col], errors="coerce")
-    
     df_limpio = df.copy()
     
-    # 2. Eliminar (Cantidad_Vendida < 0 AND Costo_Envio NaN)
+    # 1. Parsear TODAS las columnas con "fecha" (case-insensitive)
+    for col in df_limpio.columns:
+        if "fecha" in col.lower():
+            df_limpio[col] = pd.to_datetime(df_limpio[col], errors="coerce")
+    
+    # 2. Eliminar filas con cantidad negativa Y costo envío NaN
+    #    (anomalía: sin cantidad positiva y sin justificación de costo)
     if "Cantidad_Vendida" in df_limpio.columns and "Costo_Envio" in df_limpio.columns:
         mask1 = (df_limpio["Cantidad_Vendida"] < 0) & (df_limpio["Costo_Envio"].isna())
         df_limpio = df_limpio[~mask1]
     
-    # 3. Eliminar (Cantidad_Vendida < 0 AND Tiempo_Entrega_Real > 100)
+    # 3. Eliminar filas con cantidad negativa Y tiempo entrega > 100 días
+    #    (anomalía: cantidad inconsistente + entrega extremadamente atrasada)
     if "Cantidad_Vendida" in df_limpio.columns and "Tiempo_Entrega_Real" in df_limpio.columns:
         mask2 = (df_limpio["Cantidad_Vendida"] < 0) & (df_limpio["Tiempo_Entrega_Real"] > 100)
         df_limpio = df_limpio[~mask2]
     
-    # 4. Eliminar cantidades negativas residuales
+    # 4. Eliminar cantidades negativas RESIDUALES (cualquier cantidad < 0 que no haya sido capturada)
     if "Cantidad_Vendida" in df_limpio.columns:
         mask_qty_neg = df_limpio["Cantidad_Vendida"] < 0
         df_limpio = df_limpio[~mask_qty_neg]
     
-    # 5. Filtrar transacciones con fecha futura
+    # 5. Filtrar transacciones con fecha FUTURA (no deben existir)
     if "Fecha_Venta" in df_limpio.columns:
         df_limpio = df_limpio[df_limpio["Fecha_Venta"] <= pd.Timestamp.now()]
     
