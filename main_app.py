@@ -758,4 +758,8 @@ trx_inv = trx.merge(
     on="SKU_ID",
     how="left"
 )
-
+trx_inv_fb = trx_inv.merge(
+    fb[["Transaccion_ID","Ticket_Soporte_Abierto","Satisfaccion_NPS"]],
+    on="Transaccion_ID",
+    how="left"
+)
