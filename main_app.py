@@ -853,6 +853,7 @@ bodega_summary = trx_inv_fb.groupby("Bodega_Origen").agg(
     Satisfaccion_Prom=("Satisfaccion_NPS","mean"),
     Num_Transacciones=("Transaccion_ID","count")
 ).reset_index()
+st.session_state["bodega_summary"] = bodega_summary
 
 # ---------------------------------------------------
 # Visualización Scatter
