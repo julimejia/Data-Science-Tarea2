@@ -511,211 +511,75 @@ st.pyplot(fig)
 
 # ---------- 4️⃣ Diagnóstico de Fidelidad ----------
 
-# ---------- 4️⃣ Diagnóstico de Fidelidad Mejorado ----------
-st.subheader("4️⃣ Diagnóstico de Fidelidad: Stock Alto vs. Satisfacción Baja")
-
-# Verificar que inv y fb_sku existan
-if 'inv' not in locals() or 'fb_sku' not in locals():
-    st.error("❌ No se han cargado Inventario Central o Feedback por SKU. Ejecuta Fase 2 primero.")
-    st.stop()
-
-# Normalizar nombres de categorías
-if 'Categoria' in inv.columns:
-    inv["Categoria"] = inv["Categoria"].fillna("").str.lower().str.replace("-", "").str.strip()
-    inv["Categoria"] = inv["Categoria"].replace({
-        "smartphone": "smartphone",
-        "smartphones": "smartphone"
-    })
-else:
-    st.error("❌ Columna 'Categoria' no encontrada en Inventario")
-    st.stop()
-
-# Merge con feedback por SKU
-df_fidelidad = inv.merge(
-    fb_sku.groupby("SKU_ID")["Satisfaccion_NPS"].mean().reset_index(),
-    on="SKU_ID",
-    how="left"
-)
-
-# Filtro de riesgo: stock alto (percentil 75) y NPS bajo (percentil 25)
-stock_p75 = df_fidelidad["Stock_Actual"].quantile(0.75)
-nps_p25 = df_fidelidad["Satisfaccion_NPS"].quantile(0.25)
-
-fidelidad_riesgo = df_fidelidad[
-    (df_fidelidad["Stock_Actual"] > stock_p75) &
-    (df_fidelidad["Satisfaccion_NPS"] < nps_p25)
-].copy()
-
-# Agrupar por categoría para dashboard
-categoria_summary = fidelidad_riesgo.groupby("Categoria").agg(
-    Cantidad_SKU=("SKU_ID","count"),
-    Stock_Total=("Stock_Actual","sum"),
-    NPS_Promedio=("Satisfaccion_NPS","mean")
-).reset_index()
-
-categoria_summary = categoria_summary.sort_values(["Cantidad_SKU","NPS_Promedio"], ascending=[False,True])
-
-# Mostrar tabla
-st.subheader("📋 Categorías Críticas")
-st.dataframe(categoria_summary, use_container_width=True, hide_index=True)
-
-# Gráfico: Stock vs NPS
+# ---------- 4️⃣ Diagnóstico de Fidelidad: Stock vs NPS con Calidad y Precio ----------
 st.subheader("📍 Matriz de Riesgo: Stock vs Satisfacción")
-fig, ax = plt.subplots(figsize=(10,6))
 
-# Todos los SKUs
-ax.scatter(
-    df_fidelidad["Stock_Actual"],
-    df_fidelidad["Satisfaccion_NPS"],
-    alpha=0.5,
-    s=50,
-    color='blue',
-    label='Todos los SKUs'
-)
-
-# SKUs en riesgo
-if not fidelidad_riesgo.empty:
-    ax.scatter(
-        fidelidad_riesgo["Stock_Actual"],
-        fidelidad_riesgo["Satisfaccion_NPS"],
-        s=100,
-        color='red',
-        label=f'En Riesgo ({len(fidelidad_riesgo)})',
-        zorder=5
-    )
-
-# Líneas de referencia
-ax.axhline(y=nps_p25, color='orange', linestyle='--', label=f'NPS Bajo ({nps_p25:.0f})')
-ax.axvline(x=stock_p75, color='green', linestyle='--', label=f'Stock Alto ({stock_p75:.0f})')
-
-ax.set_xlabel("Stock Actual")
-ax.set_ylabel("Satisfacción NPS")
-ax.set_title("Identificación de SKUs Problemáticos")
-ax.legend()
-ax.grid(True, alpha=0.3)
-
-st.pyplot(fig)
-
-# Recomendaciones rápidas
-st.subheader("🎯 Análisis Rápido")
-if not fidelidad_riesgo.empty:
-    st.success(f"**Se encontraron {len(fidelidad_riesgo)} SKUs en riesgo**")
-    st.write("**Categorías más afectadas:**")
-    for idx, row in categoria_summary.head(3).iterrows():
-        st.write(f"- **{row['Categoria'].capitalize()}**: {row['Cantidad_SKU']} SKUs, NPS: {row['NPS_Promedio']:.0f}")
-else:
-    st.info("✅ No se encontraron SKUs con alto stock y baja satisfacción")
-
-# Botón de exportación
-if not fidelidad_riesgo.empty:
-    csv = fidelidad_riesgo[['SKU_ID','Categoria','Stock_Actual','Satisfaccion_NPS']].to_csv(index=False)
-    st.download_button(
-        label="📥 Exportar SKUs en Riesgo",
-        data=csv,
-        file_name="skus_riesgo.csv",
-        mime="text/csv"
-    )
-
-    st.info("Asegúrate de tener cargados los datasets de Inventario Central y Feedback de Clientes.") 
-    
-# ---------- 4️⃣1. Calidad de Producto basada en Reviews ----------
-st.subheader("🔧 Calificación de Producto (Quality Score)")
-
-# Verificamos columnas de reviews
-review_cols = ["SKU_ID", "Rating_Producto"]
-missing_reviews = [col for col in review_cols if col not in fb_sku.columns]
-if missing_reviews:
-    st.warning(f"⚠️ Columnas faltantes en feedback para calcular calidad: {missing_reviews}")
-    # Crear columna dummy para no romper el flujo
-    fb_sku["Calidad_Producto"] = 0
-else:
-    # Calcular promedio de Rating_Producto por SKU
-    calidad_sku = fb_sku.groupby("SKU_ID")["Rating_Producto"].mean().reset_index()
-    calidad_sku.rename(columns={"Rating_Producto":"Calidad_Producto"}, inplace=True)
-    
-    # Merge con inventario + logística
-    df_fidelidad = df_fidelidad.merge(calidad_sku, on="SKU_ID", how="left")
-    df_fidelidad["Calidad_Producto"] = df_fidelidad["Calidad_Producto"].fillna(0)
-
-# Revisar distribución de la nueva columna
-st.write("Distribución de Calidad de Producto:")
-st.bar_chart(df_fidelidad.groupby("Calidad_Producto")["SKU_ID"].count())
-# Filtro de riesgo considerando stock alto, NPS bajo y calidad baja
-fidelidad_riesgo = df_fidelidad[
-    (df_fidelidad["Stock_Actual"] > stock_p75) &
-    (df_fidelidad["Satisfaccion_NPS"] < nps_p25) &
-    (df_fidelidad["Calidad_Producto"] < 3.5)  # por ejemplo, promedio < 3.5 sobre 5
-].copy()
-
-# Agrupar por categoría
-categoria_summary = fidelidad_riesgo.groupby("Categoria").agg(
-    Cantidad_SKU=("SKU_ID","count"),
-    Stock_Total=("Stock_Actual","sum"),
-    NPS_Promedio=("Satisfaccion_NPS","mean"),
-    Calidad_Promedio=("Calidad_Producto","mean")
-).reset_index()
-
-# Mostrar tabla
-st.subheader("📋 Categorías Críticas con Baja Calidad")
-st.dataframe(categoria_summary.sort_values(["Cantidad_SKU","Calidad_Promedio"], ascending=[False, True]),
-             use_container_width=True, hide_index=True)
-
-
-st.subheader("📍 Matriz de Riesgo: Stock vs Satisfacción vs Calidad")
-
-# Primero aseguramos que las columnas existan
+# Aseguramos que las columnas existan
 for col in ["Stock_Actual", "Satisfaccion_NPS", "Calidad_Producto", "Precio_Unitario"]:
     if col not in df_fidelidad.columns:
         df_fidelidad[col] = 0  # Placeholder si faltan
 
-# Scatter plot
-fig, ax = plt.subplots(figsize=(10,6))
+# ---------- Scatter 1: Color = Calidad ----------
+st.markdown("### 🔹 Stock vs NPS (Color = Calidad de Producto)")
 
-# Todos los SKUs
-scatter_all = ax.scatter(
+fig1, ax1 = plt.subplots(figsize=(10,6))
+
+scatter_color = ax1.scatter(
     df_fidelidad["Stock_Actual"],
-    df_fidelidad["Satisfaccion_NPS"],
-    s=df_fidelidad["Precio_Unitario"],        # tamaño según precio
-    c=df_fidelidad["Calidad_Producto"],       # color según calidad
+    df_fidelidad["Satisfaccion_NPS"],  # Y siempre NPS
+    c=df_fidelidad["Calidad_Producto"],  # Color según calidad
     cmap="RdYlGn",
-    alpha=0.6,
+    s=60,
+    alpha=0.7,
     edgecolors='w',
-    linewidth=0.5,
-    label="Todos los SKUs"
+    linewidth=0.5
 )
 
-# Destacar los de riesgo (alto stock, bajo NPS, baja calidad)
-fidelidad_riesgo = df_fidelidad[
-    (df_fidelidad["Stock_Actual"] > stock_p75) &
-    (df_fidelidad["Satisfaccion_NPS"] < nps_p25) &
-    (df_fidelidad["Calidad_Producto"] < 3.5)
-].copy()
+ax1.axhline(y=nps_p25, color='orange', linestyle='--', alpha=0.7, label=f'NPS Bajo ({nps_p25:.0f})')
+ax1.axvline(x=stock_p75, color='green', linestyle='--', alpha=0.7, label=f'Stock Alto ({stock_p75:.0f})')
 
-if len(fidelidad_riesgo) > 0:
-    ax.scatter(
-        fidelidad_riesgo["Stock_Actual"],
-        fidelidad_riesgo["Satisfaccion_NPS"],
-        s=fidelidad_riesgo["Precio_Unitario"]*1.2,
-        color='red',
-        edgecolors='black',
-        linewidth=1.5,
-        label=f'SKUs en Riesgo ({len(fidelidad_riesgo)})',
-        zorder=5
-    )
+ax1.set_xlabel("Stock Actual")
+ax1.set_ylabel("Satisfacción NPS")
+ax1.set_title("Stock vs Satisfacción (Color = Calidad)")
+ax1.legend()
+ax1.grid(True, alpha=0.3)
 
-# Líneas de referencia
-ax.axhline(y=nps_p25, color='orange', linestyle='--', alpha=0.7, label=f'NPS Bajo ({nps_p25:.0f})')
-ax.axvline(x=stock_p75, color='green', linestyle='--', alpha=0.7, label=f'Stock Alto ({stock_p75:.0f})')
+cbar1 = plt.colorbar(scatter_color, ax=ax1)
+cbar1.set_label("Calidad de Producto (Rating Promedio)")
 
-ax.set_xlabel("Stock Actual")
-ax.set_ylabel("Satisfacción NPS")
-ax.set_title("Identificación de SKUs Problemáticos - Calidad y Precio")
-ax.legend()
-ax.grid(True, alpha=0.3)
+st.pyplot(fig1)
 
-# Colorbar para Calidad
-cbar = plt.colorbar(scatter_all, ax=ax)
-cbar.set_label("Calidad de Producto (Rating Promedio)")
+# ---------- Scatter 2: Color = Precio ----------
+st.markdown("### 🔹 Stock vs NPS (Color = Precio de Producto)")
 
-st.pyplot(fig)
-# ---------- 5. Storytelling Riesgo Operativo Mejorado ----------
+fig2, ax2 = plt.subplots(figsize=(10,6))
+
+scatter_price = ax2.scatter(
+    df_fidelidad["Stock_Actual"],
+    df_fidelidad["Satisfaccion_NPS"],  # Y siempre NPS
+    c=df_fidelidad["Precio_Unitario"],  # Color según precio
+    cmap="viridis",
+    s=60,
+    alpha=0.7,
+    edgecolors='w',
+    linewidth=0.5
+)
+
+ax2.axhline(y=nps_p25, color='orange', linestyle='--', alpha=0.7, label=f'NPS Bajo ({nps_p25:.0f})')
+ax2.axvline(x=stock_p75, color='green', linestyle='--', alpha=0.7, label=f'Stock Alto ({stock_p75:.0f})')
+
+ax2.set_xlabel("Stock Actual")
+ax2.set_ylabel("Satisfacción NPS")
+ax2.set_title("Stock vs Satisfacción (Color = Precio)")
+ax2.legend()
+ax2.grid(True, alpha=0.3)
+
+cbar2 = plt.colorbar(scatter_price, ax=ax2)
+cbar2.set_label("Precio Unitario (USD)")
+
+st.pyplot(fig2)
+
+
+
+
+
