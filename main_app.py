@@ -434,6 +434,15 @@ else:
         "Edad_Cliente","Satisfaccion_NPS"
     ])
 
+if not fb.empty and not trx.empty:
+    fb_sku = fb.merge(
+        trx[["Transaccion_ID", "SKU_ID"]],
+        on="Transaccion_ID",
+        how="left"
+    )
+else:
+    fb_sku = pd.DataFrame(columns=["Feedback_ID","Transaccion_ID","SKU_ID","Satisfaccion_NPS"])
+
 st.header("📊 Fase 3 – Storytelling Avanzado")
 
 # Aseguramos que merged ya tenga todas las variables derivadas
