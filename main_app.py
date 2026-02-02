@@ -349,44 +349,72 @@ if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" 
     )
 
 # =============================================================================
-# ========================= FASE 2.1 – Variables Derivadas ====================
+# ========================= FASE 2.1 – Variables Derivadas =====================
 # =============================================================================
 
+# Usaremos merged entre Transacciones + Inventario
+# merged = trx.merge(inv, on="SKU_ID", how="left", indicator=True)
+
+# ---------------------------
+# 1. Normalización defensiva
+# ---------------------------
+
+# Asegurarnos que las columnas críticas existen
+cols_necesarias = [
+    "Cantidad_Vendida",
+    "Precio_Venta_Final",
+    "Costo_Envio",
+    "Tiempo_Entrega_Real",
+    "Lead_Time_Dias",
+    "Ticket_Soporte_Abierto",
+    "sku_status"
+]
+
+for col in cols_necesarias:
+    if col not in merged.columns:
+        merged[col] = 0
+
+# Normalizamos tipos
+merged["Cantidad_Vendida"] = merged["Cantidad_Vendida"].fillna(0)
+merged["Precio_Venta_Final"] = merged["Precio_Venta_Final"].fillna(0)
+merged["Costo_Envio"] = merged["Costo_Envio"].fillna(0)
+merged["Tiempo_Entrega_Real"] = merged["Tiempo_Entrega_Real"].fillna(0)
+merged["Lead_Time_Dias"] = merged["Lead_Time_Dias"].fillna(0)
+merged["Ticket_Soporte_Abierto"] = merged["Ticket_Soporte_Abierto"].fillna(0).astype(int)
+merged["sku_status"] = merged.get("sku_status", "VALIDO")
+
+# ---------------------------
+# 2. Métricas Financieras
+# ---------------------------
 
 merged["Ingreso"] = merged["Cantidad_Vendida"] * merged["Precio_Venta_Final"]
-
-merged["Costo_Unitario_USD"] = merged["Costo_Unitario_USD"].fillna(0)
-merged["Costo_Envio"] = merged["Costo_Envio"].fillna(0)
-
-merged["Costo_Total"] = (
-    merged["Cantidad_Vendida"] * merged["Costo_Unitario_USD"]
-) + merged["Costo_Envio"]
-
+merged["Costo_Total"] = (merged["Cantidad_Vendida"] * merged["Costo_Unitario_USD"]) + merged["Costo_Envio"]
 merged["Margen_Utilidad"] = merged["Ingreso"] - merged["Costo_Total"]
+merged["Margen_Pct"] = merged.apply(lambda x: x["Margen_Utilidad"] / x["Ingreso"] if x["Ingreso"] > 0 else 0, axis=1)
 
-merged["Margen_Pct"] = merged.apply(
-    lambda x: x["Margen_Utilidad"] / x["Ingreso"] if x["Ingreso"] > 0 else 0,
-    axis=1
-)
+# ---------------------------
+# 3. Métricas Logísticas
+# ---------------------------
 
-merged["Brecha_Entrega_Dias"] = (
-    merged["Tiempo_Entrega_Real"] - merged["Lead_Time_Dias"]
-)
-merged["Ticket_Soporte_Abierto"] = merged["Ticket_Soporte_Abierto"].fillna(0)
+merged["Brecha_Entrega_Dias"] = merged["Tiempo_Entrega_Real"] - merged["Lead_Time_Dias"]
+
+# ---------------------------
+# 4. Métricas de Soporte
+# ---------------------------
 
 ratio_soporte_categoria = (
-    merged.groupby("Categoria")
+    merged.groupby("Categoria", dropna=False)
     .agg(
         tickets_soporte=("Ticket_Soporte_Abierto", "sum"),
         transacciones=("Transaccion_ID", "count")
     )
     .reset_index()
 )
+ratio_soporte_categoria["Ratio_Soporte"] = ratio_soporte_categoria["tickets_soporte"] / ratio_soporte_categoria["transacciones"]
 
-ratio_soporte_categoria["Ratio_Soporte"] = (
-    ratio_soporte_categoria["tickets_soporte"] /
-    ratio_soporte_categoria["transacciones"]
-)
+# ---------------------------
+# 5. Riesgo Operativo
+# ---------------------------
 
 merged["Riesgo_Operativo"] = (
     (merged["sku_status"] == "FANTASMA") |
@@ -395,16 +423,16 @@ merged["Riesgo_Operativo"] = (
     (merged["Ticket_Soporte_Abierto"] == 1)
 ).astype(int)
 
-merged["Health_Score"] = 100
+# ---------------------------
+# 6. Health Score (0–100)
+# ---------------------------
 
+merged["Health_Score"] = 100
 merged.loc[merged["sku_status"] == "FANTASMA", "Health_Score"] -= 40
 merged.loc[merged["Margen_Utilidad"] < 0, "Health_Score"] -= 30
 merged.loc[merged["Brecha_Entrega_Dias"] > 2, "Health_Score"] -= 20
 merged.loc[merged["Ticket_Soporte_Abierto"] == 1, "Health_Score"] -= 10
-
 merged["Health_Score"] = merged["Health_Score"].clip(0, 100)
-
-
 
 
 
