@@ -623,67 +623,78 @@ for col in ["Stock_Actual", "Satisfaccion_NPS", "Calidad_Producto", "Precio_Unit
     if col not in df_fidelidad.columns:
         df_fidelidad[col] = 0  # Placeholder si faltan
 
-# ---------- Scatter 1: Color = Calidad ----------
-st.markdown("### 🔹 Stock vs NPS (Color = Calidad de Producto)")
+# ---------- Scatter 1: Y = Calidad ----------
+st.subheader("📍 Stock vs Calidad de Producto (Destacando SKUs en Riesgo)")
 
 fig1, ax1 = plt.subplots(figsize=(10,6))
 
-scatter_color = ax1.scatter(
-    df_fidelidad["Stock_Actual"],
-    df_fidelidad["Satisfaccion_NPS"],  # Y siempre NPS
-    c=df_fidelidad["Calidad_Producto"],  # Color según calidad
-    cmap="RdYlGn",
+# Scatter normal (azul)
+ax1.scatter(
+    df_fidelidad.loc[~df_fidelidad.index.isin(fidelidad_riesgo.index), "Stock_Actual"],
+    df_fidelidad.loc[~df_fidelidad.index.isin(fidelidad_riesgo.index), "Calidad_Producto"],
+    color='blue',
     s=60,
     alpha=0.7,
-    edgecolors='w',
-    linewidth=0.5
+    label="Normal"
 )
 
-ax1.axhline(y=nps_p25, color='orange', linestyle='--', alpha=0.7, label=f'NPS Bajo ({nps_p25:.0f})')
+# Scatter SKUs en riesgo (rojo)
+if len(fidelidad_riesgo) > 0:
+    ax1.scatter(
+        fidelidad_riesgo["Stock_Actual"],
+        fidelidad_riesgo["Calidad_Producto"],
+        color='red',
+        s=80,
+        edgecolors='black',
+        linewidth=1.2,
+        label=f'En Riesgo ({len(fidelidad_riesgo)} SKUs)'
+    )
+
+# Líneas de referencia
 ax1.axvline(x=stock_p75, color='green', linestyle='--', alpha=0.7, label=f'Stock Alto ({stock_p75:.0f})')
 
 ax1.set_xlabel("Stock Actual")
-ax1.set_ylabel("Satisfacción NPS")
-ax1.set_title("Stock vs Satisfacción (Color = Calidad)")
+ax1.set_ylabel("Calidad del Producto (Rating Promedio)")
+ax1.set_title("Stock vs Calidad de Producto")
 ax1.legend()
 ax1.grid(True, alpha=0.3)
 
-cbar1 = plt.colorbar(scatter_color, ax=ax1)
-cbar1.set_label("Calidad de Producto (Rating Promedio)")
-
 st.pyplot(fig1)
 
-# ---------- Scatter 2: Color = Precio ----------
-st.markdown("### 🔹 Stock vs NPS (Color = Precio de Producto)")
+# ---------- Scatter 2: Y = Precio ----------
+st.subheader("📍 Stock vs Precio Unitario (Destacando SKUs en Riesgo)")
 
 fig2, ax2 = plt.subplots(figsize=(10,6))
 
-scatter_price = ax2.scatter(
-    df_fidelidad["Stock_Actual"],
-    df_fidelidad["Satisfaccion_NPS"],  # Y siempre NPS
-    c=df_fidelidad["Precio_Unitario"],  # Color según precio
-    cmap="viridis",
+# Scatter normal (azul)
+ax2.scatter(
+    df_fidelidad.loc[~df_fidelidad.index.isin(fidelidad_riesgo.index), "Stock_Actual"],
+    df_fidelidad.loc[~df_fidelidad.index.isin(fidelidad_riesgo.index), "Precio_Unitario"],
+    color='blue',
     s=60,
     alpha=0.7,
-    edgecolors='w',
-    linewidth=0.5
+    label="Normal"
 )
 
-ax2.axhline(y=nps_p25, color='orange', linestyle='--', alpha=0.7, label=f'NPS Bajo ({nps_p25:.0f})')
+# Scatter SKUs en riesgo (rojo)
+if len(fidelidad_riesgo) > 0:
+    ax2.scatter(
+        fidelidad_riesgo["Stock_Actual"],
+        fidelidad_riesgo["Precio_Unitario"],
+        color='red',
+        s=80,
+        edgecolors='black',
+        linewidth=1.2,
+        label=f'En Riesgo ({len(fidelidad_riesgo)} SKUs)'
+    )
+
+# Líneas de referencia
 ax2.axvline(x=stock_p75, color='green', linestyle='--', alpha=0.7, label=f'Stock Alto ({stock_p75:.0f})')
 
 ax2.set_xlabel("Stock Actual")
-ax2.set_ylabel("Satisfacción NPS")
-ax2.set_title("Stock vs Satisfacción (Color = Precio)")
+ax2.set_ylabel("Precio Unitario (USD)")
+ax2.set_title("Stock vs Precio Unitario")
 ax2.legend()
 ax2.grid(True, alpha=0.3)
 
-cbar2 = plt.colorbar(scatter_price, ax=ax2)
-cbar2.set_label("Precio Unitario (USD)")
-
 st.pyplot(fig2)
-
-
-
-
-
