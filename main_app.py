@@ -523,53 +523,83 @@ ax.set_ylabel("Satisfacción NPS")
 ax.set_title("Paradoja Stock Alto vs Sentimiento Negativo")
 st.pyplot(fig)
 
-# ---------- 5. Storytelling Riesgo Operativo ----------
 # ---------- 5. Storytelling Riesgo Operativo Mejorado ----------
 st.subheader("5️⃣ Storytelling de Riesgo Operativo (Visual Avanzado)")
 
-# Merge Feedback + Inventario para asociar cada ticket con la Bodega
-fb_bodega = fb_sku.merge(inv[["SKU_ID", "Bodega_Origen", "Stock_Actual"]], on="SKU_ID", how="left")
+# Preparar datos de riesgo desde transacciones + feedback
+# Primero, contar tickets por SKU_ID
+tickets_sku = fb_sku.groupby("SKU_ID")["Ticket_Soporte_Abierto"].sum().reset_index()
+tickets_sku.columns = ["SKU_ID", "Tickets_Abiertos"]
 
-# Agrupar tickets y stock por Bodega
-df_riesgo = fb_bodega.groupby("Bodega_Origen").agg(
-    Tickets_Abiertos=("Ticket_Soporte_Abierto","sum"),
-    Stock_Total=("Stock_Actual","sum"),
-    Ultima_Revision=("Ultima_Revision","max")
-).reset_index()
+# Merge con inventario para obtener Bodega_Origen y Stock_Actual
+inv_cols_needed = ["SKU_ID", "Bodega_Origen", "Stock_Actual", "Ultima_Revision"] if all(c in inv.columns for c in ["SKU_ID", "Bodega_Origen", "Stock_Actual", "Ultima_Revision"]) else []
 
-df_riesgo["Ultima_Revision"] = pd.to_datetime(df_riesgo["Ultima_Revision"], errors="coerce")
-df_riesgo["Dias_Ultima_Revision"] = (pd.Timestamp.today() - df_riesgo["Ultima_Revision"]).dt.days
+if not inv_cols_needed:
+    # Si faltan columnas, usar solo las disponibles
+    inv_cols_needed = [c for c in ["SKU_ID", "Bodega_Origen", "Stock_Actual", "Ultima_Revision"] if c in inv.columns]
 
-# Colorear según riesgo: mucho tickets + mucha antigüedad = crítico
-df_riesgo["Riesgo"] = df_riesgo["Tickets_Abiertos"] * df_riesgo["Dias_Ultima_Revision"]
+if inv_cols_needed:
+    df_riesgo_temp = tickets_sku.merge(inv[inv_cols_needed], on="SKU_ID", how="left")
+    
+    # Agrupar por Bodega_Origen si existe
+    if "Bodega_Origen" in df_riesgo_temp.columns:
+        df_riesgo = df_riesgo_temp.groupby("Bodega_Origen").agg({
+            "Tickets_Abiertos": "sum",
+            "Stock_Actual": "sum" if "Stock_Actual" in df_riesgo_temp.columns else lambda x: 0,
+            "Ultima_Revision": "max" if "Ultima_Revision" in df_riesgo_temp.columns else lambda x: None
+        }).reset_index()
+    else:
+        st.warning("⚠️ Columna 'Bodega_Origen' no disponible en inventario")
+        df_riesgo = df_riesgo_temp.copy()
+else:
+    st.warning("⚠️ Columnas requeridas no disponibles en inventario para análisis de riesgo")
+    df_riesgo = pd.DataFrame()
 
-# Scatter plot con storytelling
-fig, ax = plt.subplots(figsize=(10,6))
-scatter = ax.scatter(
-    df_riesgo["Dias_Ultima_Revision"], 
-    df_riesgo["Tickets_Abiertos"], 
-    s=df_riesgo["Stock_Total"]/10,  # tamaño según stock
-    c=df_riesgo["Riesgo"],          # color según riesgo
-    cmap="Reds",
-    alpha=0.7,
-    edgecolor="black"
-)
+if not df_riesgo.empty:
+    # Procesar fechas si Ultima_Revision existe
+    if "Ultima_Revision" in df_riesgo.columns:
+        df_riesgo["Ultima_Revision"] = pd.to_datetime(df_riesgo["Ultima_Revision"], errors="coerce")
+        df_riesgo["Dias_Ultima_Revision"] = (pd.Timestamp.today() - df_riesgo["Ultima_Revision"]).dt.days
+        df_riesgo["Dias_Ultima_Revision"] = df_riesgo["Dias_Ultima_Revision"].fillna(0)
+    else:
+        df_riesgo["Dias_Ultima_Revision"] = 0
+    
+    df_riesgo["Stock_Total"] = df_riesgo.get("Stock_Actual", 0)
+    df_riesgo["Riesgo"] = df_riesgo["Tickets_Abiertos"] * (df_riesgo["Dias_Ultima_Revision"] + 1)
 
-# Añadir etiquetas de bodega
-for i, row in df_riesgo.iterrows():
-    ax.text(row["Dias_Ultima_Revision"]+0.5, row["Tickets_Abiertos"], row["Bodega_Origen"], fontsize=9)
+    # Scatter plot con storytelling
+    fig, ax = plt.subplots(figsize=(10,6))
+    
+    if len(df_riesgo) > 0:
+        scatter = ax.scatter(
+            df_riesgo["Dias_Ultima_Revision"], 
+            df_riesgo["Tickets_Abiertos"], 
+            s=(df_riesgo["Stock_Total"].fillna(0) / 10).clip(lower=50),
+            c=df_riesgo["Riesgo"],
+            cmap="Reds",
+            alpha=0.7,
+            edgecolor="black"
+        )
 
-ax.set_xlabel("Días desde Última Revisión")
-ax.set_ylabel("Tickets de Soporte Abiertos")
-ax.set_title("Riesgo Operativo: Bodegas con Tickets vs Antigüedad (Tamaño=Stock, Color=Riesgo)")
-cbar = plt.colorbar(scatter)
-cbar.set_label("Riesgo (Tickets x Días)")
-st.pyplot(fig)
+        # Añadir etiquetas de bodega si existen
+        if "Bodega_Origen" in df_riesgo.columns:
+            for i, row in df_riesgo.iterrows():
+                ax.text(row["Dias_Ultima_Revision"]+0.5, row["Tickets_Abiertos"], row["Bodega_Origen"], fontsize=9)
 
-# Mostrar tabla ordenada por riesgo
-st.dataframe(df_riesgo.sort_values("Riesgo", ascending=False)[[
-    "Bodega_Origen","Dias_Ultima_Revision","Tickets_Abiertos","Stock_Total","Riesgo"
-]])
+        ax.set_xlabel("Días desde Última Revisión")
+        ax.set_ylabel("Tickets de Soporte Abiertos")
+        ax.set_title("Riesgo Operativo: SKUs con Tickets vs Antigüedad (Tamaño=Stock, Color=Riesgo)")
+        cbar = plt.colorbar(scatter)
+        cbar.set_label("Riesgo (Tickets x Días)")
+    
+    st.pyplot(fig)
+
+    # Mostrar tabla ordenada por riesgo
+    display_cols = [c for c in ["Bodega_Origen", "Dias_Ultima_Revision", "Tickets_Abiertos", "Stock_Total", "Riesgo"] if c in df_riesgo.columns]
+    if display_cols:
+        st.dataframe(df_riesgo.sort_values("Riesgo", ascending=False)[display_cols])
+else:
+    st.info("📊 Sin datos suficientes para análisis de riesgo operativo")
 
 
 
