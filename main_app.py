@@ -68,7 +68,10 @@ def cargar_transacciones(file):
     return df, df.copy()
 
 # ==============================
-# HEALTHCHECK CENTRALIZADO
+# HEALTHCHECK CENTRALIZADO (inmediato)
+# - For each uploaded file we run an immediate health check that returns
+#   basic metadata, missing-value percentages, duplicate counts, dtypes
+#   and required-column validation. Results are stored in `datasets[name]["health"]`.
 # ==============================
 FILES_CONFIG = {
     "Feedback de Clientes": {
@@ -88,6 +91,23 @@ FILES_CONFIG = {
     }
 }
 
+def run_healthcheck(df_raw, df_clean=None, required_cols=None):
+    hc = {}
+    hc["rows"] = len(df_raw)
+    hc["cols"] = len(df_raw.columns)
+    # percent missing (rounded)
+    hc["missing_pct"] = (df_raw.isna().mean() * 100).round(2).to_dict()
+    hc["missing_count"] = df_raw.isna().sum().to_dict()
+    hc["duplicates"] = int(df_raw.duplicated().sum())
+    hc["dtypes"] = df_raw.dtypes.astype(str).to_dict()
+    hc["sample_head"] = df_raw.head(5)
+    missing_required = []
+    if required_cols:
+        missing_required = list(set(required_cols) - set(df_raw.columns))
+    hc["missing_required_cols"] = missing_required
+    hc["status"] = "ok" if not missing_required else "invalid_cols"
+    return hc
+
 health_status = {}
 datasets = {}
 
@@ -100,15 +120,14 @@ for name, cfg in FILES_CONFIG.items():
 
     try:
         df_raw, df_clean = cfg["loader"](file)
+        health = run_healthcheck(df_raw, df_clean, cfg.get("required_cols"))
 
-        if cfg["required_cols"]:
-            missing = set(cfg["required_cols"]) - set(df_raw.columns)
-            if missing:
-                health_status[name] = f"invalid_cols: {missing}"
-                continue
+        datasets[name] = {"raw": df_raw, "clean": df_clean, "health": health}
 
-        datasets[name] = {"raw": df_raw, "clean": df_clean}
-        health_status[name] = "ok"
+        if health["status"] == "ok":
+            health_status[name] = "ok"
+        else:
+            health_status[name] = f"invalid_cols: {health['missing_required_cols']}"
 
     except Exception as e:
         health_status[name] = f"error: {e}"
@@ -123,10 +142,33 @@ for col, (name, status) in zip(cols, health_status.items()):
     with col:
         if status == "ok":
             st.success(f"✅ {name}")
+            # show a compact health summary
+            health = datasets.get(name, {}).get("health")
+            if health:
+                with st.expander("Detalles Healthcheck"):
+                    st.markdown(f"- **Filas:** {health['rows']}  \n- **Columnas:** {health['cols']}  \n- **Duplicados:** {health['duplicates']}")
+                    # show top 5 missing columns by percent
+                    missing_pct = {k: v for k, v in health["missing_pct"].items() if v > 0}
+                    if missing_pct:
+                        sorted_missing = dict(sorted(missing_pct.items(), key=lambda x: x[1], reverse=True))
+                        top5 = list(sorted_missing.items())[:5]
+                        st.table(pd.DataFrame(top5, columns=["Columna", "% Missing"]))
+                    else:
+                        st.info("No missing values detected")
+
         elif status == "missing":
             st.warning(f"⚠️ {name}\nNo cargado")
+
         elif "invalid_cols" in status:
-            st.error(f"❌ {name}\nColumnas faltantes")
+            # show which required columns are missing if available
+            missing_list = []
+            if name in datasets:
+                missing_list = datasets[name]["health"].get("missing_required_cols", [])
+            st.error(f"❌ {name}\nColumnas faltantes: {missing_list}")
+            if name in datasets:
+                with st.expander("Ver detalles de healthcheck"):
+                    st.write(datasets[name]["health"]["sample_head"])
+
         else:
             st.error(f"❌ {name}\nError al procesar")
 
