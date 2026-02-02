@@ -424,6 +424,8 @@ if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" 
 # FASE 3 – Análisis Avanzado y Storytelling
 # =============================================================================
 
+fb = datasets["Feedback de Clientes"]["clean"].copy()
+
 st.header("📊 Fase 3 – Storytelling Avanzado")
 
 # Aseguramos que merged ya tenga todas las variables derivadas
