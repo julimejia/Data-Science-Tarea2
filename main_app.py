@@ -754,7 +754,7 @@ trx["Transaccion_ID"] = trx["Transaccion_ID"].astype(str).str.strip()
 fb["Transaccion_ID"] = fb["Transaccion_ID"].astype(str).str.strip()
 
 trx_inv = trx.merge(
-    inv[["SKU_ID","Bodega_Origen","ultima_revision"]],
+    inv[["SKU_ID","Bodega_Origen","Ultima_Revision"]],
     on="SKU_ID",
     how="left"
 )
