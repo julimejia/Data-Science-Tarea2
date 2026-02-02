@@ -300,17 +300,16 @@ if not datasets_disponibles:
     st.stop()
 
 # =============================================================================
-# ========================= FASE 2 – SKU FANTASMA ===============================
+# ========================= FASE 2 – SKU Fantasma + Variables Derivadas =======
 # =============================================================================
-
 if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" in datasets_disponibles:
 
     st.markdown("---")
-    st.header("👻 FASE 2 – Análisis Avanzado de SKU Fantasma")
+    st.header("👻 FASE 2 – Análisis de SKU Fantasma y Variables Derivadas")
 
-    # ============================================================
-    # PREPARACIÓN DE DATOS
-    # ============================================================
+    # ---------------------------
+    # 1. Merge Transacciones + Inventario
+    # ---------------------------
     inv = datasets["Inventario Central"]["clean"].copy()
     trx = datasets["Transacciones Logísticas"]["clean"].copy()
 
@@ -318,223 +317,49 @@ if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" 
     trx["SKU_ID"] = trx["SKU_ID"].astype(str).str.strip()
 
     merged = trx.merge(
-        inv[["SKU_ID"]],
+        inv[["SKU_ID", "Categoria", "Stock_Actual", "Costo_Unitario_USD", "Punto_Reorden", "Lead_Time_Dias"]],
         on="SKU_ID",
         how="left",
         indicator=True
     )
 
-    merged["sku_status"] = merged["_merge"].map({
-        "both": "VALIDO",
-        "left_only": "FANTASMA"
-    })
-
-    # Normalización financiera
-    merged["Cantidad_Vendida"] = merged["Cantidad_Vendida"].fillna(0)
-    merged["Precio_Venta_Final"] = merged["Precio_Venta_Final"].fillna(0)
-    merged["ingreso"] = merged["Cantidad_Vendida"] * merged["Precio_Venta_Final"]
-
-    # ============================================================
-    # DASHBOARD 1 – VISIBILIDAD SKU FANTASMA
-    # ============================================================
-    st.subheader("📦 Visibilidad de SKUs Fantasma")
-
-    resumen = merged["sku_status"].value_counts().reset_index()
-    resumen.columns = ["Estado SKU", "Cantidad"]
-
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Transacciones Totales", len(merged))
-    col2.metric(
-        "SKUs Fantasma",
-        int(resumen.loc[resumen["Estado SKU"] == "FANTASMA", "Cantidad"].sum())
-    )
-    col3.metric(
-        "% Transacciones Fantasma",
-        f"{(resumen.loc[resumen['Estado SKU']=='FANTASMA','Cantidad'].sum() / len(merged))*100:.2f}%"
-    )
-
-    fig1, ax1 = plt.subplots(figsize=(6, 4))
-    ax1.bar(
-        resumen["Estado SKU"],
-        resumen["Cantidad"],
-        color=["#2ecc71", "#e74c3c"]
-    )
-    ax1.set_title("Distribución de Transacciones por Estado SKU")
-    ax1.set_ylabel("Número de Transacciones")
-    ax1.grid(axis="y", alpha=0.3)
-
-    st.pyplot(fig1)
-
-    # DESCARGA DEL GRÁFICO
-    buf1 = io.BytesIO()
-    fig1.savefig(buf1, format="png", bbox_inches="tight")
-    buf1.seek(0)
-
-    st.download_button(
-        "📥 Descargar gráfico SKU (PNG)",
-        buf1,
-        "distribucion_sku_fantasma.png",
-        "image/png"
-    )
-
-    st.download_button(
-        "📥 Descargar resumen SKU (CSV)",
-        resumen.to_csv(index=False),
-        "resumen_sku_fantasma.csv",
-        "text/csv"
-    )
-
-    # ============================================================
-    # DASHBOARD 2 – IMPACTO FINANCIERO
-    # ============================================================
-    st.subheader("💰 Impacto Financiero del SKU Fantasma")
-
-    impacto = merged.groupby("sku_status")["ingreso"].sum().reset_index()
-
-    total_ingresos = impacto["ingreso"].sum()
-    ingresos_fantasma = impacto.loc[
-        impacto["sku_status"] == "FANTASMA", "ingreso"
-    ].sum()
-
-    col1, col2 = st.columns(2)
-    col1.metric("Ingreso Total (USD)", f"{total_ingresos:,.0f}")
-    col2.metric(
-        "% Ingresos en Riesgo",
-        f"{(ingresos_fantasma / total_ingresos) * 100:.2f}%" if total_ingresos > 0 else "0%"
-    )
-
-    fig2, ax2 = plt.subplots(figsize=(6, 4))
-    ax2.bar(
-        impacto["sku_status"],
-        impacto["ingreso"],
-        color=["#2ecc71", "#e74c3c"]
-    )
-    ax2.set_title("Ingresos por Estado del SKU")
-    ax2.set_ylabel("Ingreso (USD)")
-    ax2.grid(axis="y", alpha=0.3)
-
-    st.pyplot(fig2)
-
-    buf2 = io.BytesIO()
-    fig2.savefig(buf2, format="png", bbox_inches="tight")
-    buf2.seek(0)
-
-    st.download_button(
-        "📥 Descargar impacto financiero (PNG)",
-        buf2,
-        "impacto_financiero_sku_fantasma.png",
-        "image/png"
-    )
-
-    st.download_button(
-        "📥 Descargar impacto financiero (CSV)",
-        impacto.to_csv(index=False),
-        "impacto_financiero_sku_fantasma.csv",
-        "text/csv"
-    )
-
-    # ============================================================
-    # DASHBOARD 3 – STORYTELLING EJECUTIVO
-    # ============================================================
-    st.subheader("🧠 Storytelling Ejecutivo del Riesgo Operativo")
-
-    resumen_exec = merged.groupby("sku_status").agg(
-        transacciones=("SKU_ID", "count"),
-        ingreso_total=("ingreso", "sum"),
-        ingreso_promedio=("ingreso", "mean")
-    ).reset_index()
-
-    st.dataframe(resumen_exec, use_container_width=True)
-
-    st.download_button(
-        "📥 Descargar resumen ejecutivo (CSV)",
-        resumen_exec.to_csv(index=False),
-        "resumen_ejecutivo_sku_fantasma.csv",
-        "text/csv"
-    )
-
-    st.info(
-        """
-        🔎 **Insight Ejecutivo**
-
-        Los **SKUs Fantasma** representan transacciones sin respaldo en inventario físico.
-
-        ⚠️ Impactos clave:
-        - Distorsión de KPIs financieros
-        - Sobreestimación de ingresos
-        - Riesgo en auditoría y control interno
-
-        ✅ **Recomendación**:
-        Implementar validación obligatoria de SKU contra inventario maestro
-        antes de permitir la transacción.
-        """
-    )
-
-    # =============================================================================
-    # ========================= FASE 2.1 – Variables Derivadas =====================
-    # =============================================================================
+    # ---------------------------
+    # 2. Identificación SKUs Fantasma
+    # ---------------------------
+    merged["sku_status"] = merged["_merge"].apply(lambda x: "FANTASMA" if x=="left_only" else "VALIDO")
 
     # ---------------------------
-    # 1. Normalización defensiva
+    # 3. Normalización de columnas y tipos
     # ---------------------------
-
-    # Asegurarnos que las columnas críticas existen
-    cols_necesarias = [
+    cols_defensivas = [
         "Cantidad_Vendida",
         "Precio_Venta_Final",
         "Costo_Envio",
         "Tiempo_Entrega_Real",
         "Lead_Time_Dias",
-        "Ticket_Soporte_Abierto",
-        "sku_status"
+        "Ticket_Soporte_Abierto"
     ]
-
-    for col in cols_necesarias:
+    for col in cols_defensivas:
         if col not in merged.columns:
             merged[col] = 0
-
-    # Normalizamos tipos
     merged["Cantidad_Vendida"] = merged["Cantidad_Vendida"].fillna(0)
     merged["Precio_Venta_Final"] = merged["Precio_Venta_Final"].fillna(0)
     merged["Costo_Envio"] = merged["Costo_Envio"].fillna(0)
     merged["Tiempo_Entrega_Real"] = merged["Tiempo_Entrega_Real"].fillna(0)
     merged["Lead_Time_Dias"] = merged["Lead_Time_Dias"].fillna(0)
     merged["Ticket_Soporte_Abierto"] = merged["Ticket_Soporte_Abierto"].fillna(0).astype(int)
-    merged["sku_status"] = merged.get("sku_status", "VALIDO")
+    merged["Costo_Unitario_USD"] = merged["Costo_Unitario_USD"].fillna(0)
 
     # ---------------------------
-    # 2. Métricas Financieras
+    # 4. Variables derivadas
     # ---------------------------
-
     merged["Ingreso"] = merged["Cantidad_Vendida"] * merged["Precio_Venta_Final"]
     merged["Costo_Total"] = (merged["Cantidad_Vendida"] * merged["Costo_Unitario_USD"]) + merged["Costo_Envio"]
     merged["Margen_Utilidad"] = merged["Ingreso"] - merged["Costo_Total"]
-    merged["Margen_Pct"] = merged.apply(lambda x: x["Margen_Utilidad"] / x["Ingreso"] if x["Ingreso"] > 0 else 0, axis=1)
-
-    # ---------------------------
-    # 3. Métricas Logísticas
-    # ---------------------------
-
+    merged["Margen_Pct"] = merged.apply(lambda x: x["Margen_Utilidad"]/x["Ingreso"] if x["Ingreso"]>0 else 0, axis=1)
     merged["Brecha_Entrega_Dias"] = merged["Tiempo_Entrega_Real"] - merged["Lead_Time_Dias"]
 
-    # ---------------------------
-    # 4. Métricas de Soporte
-    # ---------------------------
-
-    ratio_soporte_categoria = (
-        merged.groupby("Categoria", dropna=False)
-        .agg(
-            tickets_soporte=("Ticket_Soporte_Abierto", "sum"),
-            transacciones=("Transaccion_ID", "count")
-        )
-        .reset_index()
-    )
-    ratio_soporte_categoria["Ratio_Soporte"] = ratio_soporte_categoria["tickets_soporte"] / ratio_soporte_categoria["transacciones"]
-
-    # ---------------------------
-    # 5. Riesgo Operativo
-    # ---------------------------
-
+    # Riesgo operativo
     merged["Riesgo_Operativo"] = (
         (merged["sku_status"] == "FANTASMA") |
         (merged["Margen_Utilidad"] < 0) |
@@ -542,17 +367,54 @@ if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" 
         (merged["Ticket_Soporte_Abierto"] == 1)
     ).astype(int)
 
-    # ---------------------------
-    # 6. Health Score (0–100)
-    # ---------------------------
-
+    # Health Score
     merged["Health_Score"] = 100
-    merged.loc[merged["sku_status"] == "FANTASMA", "Health_Score"] -= 40
-    merged.loc[merged["Margen_Utilidad"] < 0, "Health_Score"] -= 30
-    merged.loc[merged["Brecha_Entrega_Dias"] > 2, "Health_Score"] -= 20
-    merged.loc[merged["Ticket_Soporte_Abierto"] == 1, "Health_Score"] -= 10
-    merged["Health_Score"] = merged["Health_Score"].clip(0, 100)
+    merged.loc[merged["sku_status"]=="FANTASMA","Health_Score"] -= 40
+    merged.loc[merged["Margen_Utilidad"]<0,"Health_Score"] -= 30
+    merged.loc[merged["Brecha_Entrega_Dias"]>2,"Health_Score"] -= 20
+    merged.loc[merged["Ticket_Soporte_Abierto"]==1,"Health_Score"] -= 10
+    merged["Health_Score"] = merged["Health_Score"].clip(0,100)
 
+    # ---------------------------
+    # 5. Dashboard visualizaciones
+    # ---------------------------
+    st.subheader("📦 Visibilidad de SKUs Fantasma")
+    resumen = merged["sku_status"].value_counts().reset_index()
+    resumen.columns = ["Estado SKU","Cantidad"]
 
+    col1, col2 = st.columns(2)
+    col1.metric("Transacciones Totales", len(merged))
+    col2.metric("SKUs Fantasma", resumen.loc[resumen["Estado SKU"]=="FANTASMA","Cantidad"].sum())
+
+    fig1, ax1 = plt.subplots()
+    ax1.bar(resumen["Estado SKU"], resumen["Cantidad"], color=["green","red"])
+    ax1.set_ylabel("Número de Transacciones")
+    ax1.set_title("Distribución SKUs Fantasma vs Válidos")
+    st.pyplot(fig1)
+
+    st.subheader("💰 Impacto Financiero y Margen")
+    fig2, ax2 = plt.subplots()
+    ax2.scatter(merged["Margen_Pct"], merged["Ingreso"], c=merged["Health_Score"], cmap="RdYlGn", alpha=0.7)
+    ax2.set_xlabel("Margen %")
+    ax2.set_ylabel("Ingreso USD")
+    ax2.set_title("Margen vs Ingreso (color = Health Score)")
+    st.pyplot(fig2)
+
+    st.subheader("🧠 Riesgo Operativo")
+    st.dataframe(merged[[
+        "Transaccion_ID","SKU_ID","sku_status","Ingreso","Costo_Total","Margen_Utilidad","Margen_Pct",
+        "Brecha_Entrega_Dias","Ticket_Soporte_Abierto","Riesgo_Operativo","Health_Score"
+    ]].head(50), use_container_width=True)
+
+    # ---------------------------
+    # 6. Descarga CSV de variables derivadas
+    # ---------------------------
+    csv_derivadas = merged.to_csv(index=False)
+    st.download_button(
+        "📥 Descargar CSV con Variables Derivadas",
+        csv_derivadas,
+        f"variables_derivadas_{datetime.now().strftime('%Y%m%d')}.csv",
+        "text/csv"
+    )
 
 
