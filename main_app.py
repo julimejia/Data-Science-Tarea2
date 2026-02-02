@@ -616,6 +616,49 @@ if not fidelidad_riesgo.empty:
         mime="text/csv"
     )
 
-    st.info("Asegúrate de tener cargados los datasets de Inventario Central y Feedback de Clientes.")
+    st.info("Asegúrate de tener cargados los datasets de Inventario Central y Feedback de Clientes.") 
+    
+# ---------- 4️⃣1. Calidad de Producto basada en Reviews ----------
+st.subheader("🔧 Calificación de Producto (Quality Score)")
+
+# Verificamos columnas de reviews
+review_cols = ["SKU_ID", "Rating_Producto"]
+missing_reviews = [col for col in review_cols if col not in fb_sku.columns]
+if missing_reviews:
+    st.warning(f"⚠️ Columnas faltantes en feedback para calcular calidad: {missing_reviews}")
+    # Crear columna dummy para no romper el flujo
+    fb_sku["Calidad_Producto"] = 0
+else:
+    # Calcular promedio de Rating_Producto por SKU
+    calidad_sku = fb_sku.groupby("SKU_ID")["Rating_Producto"].mean().reset_index()
+    calidad_sku.rename(columns={"Rating_Producto":"Calidad_Producto"}, inplace=True)
+    
+    # Merge con inventario + logística
+    df_fidelidad = df_fidelidad.merge(calidad_sku, on="SKU_ID", how="left")
+    df_fidelidad["Calidad_Producto"] = df_fidelidad["Calidad_Producto"].fillna(0)
+
+# Revisar distribución de la nueva columna
+st.write("Distribución de Calidad de Producto:")
+st.bar_chart(df_fidelidad.groupby("Calidad_Producto")["SKU_ID"].count())
+# Filtro de riesgo considerando stock alto, NPS bajo y calidad baja
+fidelidad_riesgo = df_fidelidad[
+    (df_fidelidad["Stock_Actual"] > stock_p75) &
+    (df_fidelidad["Satisfaccion_NPS"] < nps_p25) &
+    (df_fidelidad["Calidad_Producto"] < 3.5)  # por ejemplo, promedio < 3.5 sobre 5
+].copy()
+
+# Agrupar por categoría
+categoria_summary = fidelidad_riesgo.groupby("Categoria").agg(
+    Cantidad_SKU=("SKU_ID","count"),
+    Stock_Total=("Stock_Actual","sum"),
+    NPS_Promedio=("Satisfaccion_NPS","mean"),
+    Calidad_Promedio=("Calidad_Producto","mean")
+).reset_index()
+
+# Mostrar tabla
+st.subheader("📋 Categorías Críticas con Baja Calidad")
+st.dataframe(categoria_summary.sort_values(["Cantidad_SKU","Calidad_Promedio"], ascending=[False, True]),
+             use_container_width=True, hide_index=True)
+
 
 # ---------- 5. Storytelling Riesgo Operativo Mejorado ----------
