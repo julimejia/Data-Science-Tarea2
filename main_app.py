@@ -608,98 +608,199 @@ ax.set_ylabel("Ingreso (USD)")
 ax.set_title("Impacto financiero por tipo de SKU")
 st.pyplot(fig)
 
-# ---------- 4. Diagnóstico de Fidelidad ----------
-st.subheader("4️⃣ Diagnóstico de Fidelidad")
-df_fidelidad = inv.merge(fb_sku.groupby("SKU_ID")["Satisfaccion_NPS"].mean().reset_index(), on="SKU_ID", how="left")
-fidelidad_riesgo = df_fidelidad[(df_fidelidad["Stock_Actual"] > df_fidelidad["Stock_Actual"].median()) &
-                                (df_fidelidad["Satisfaccion_NPS"] < 50)]
-st.metric("SKUs con stock alto pero NPS bajo", len(fidelidad_riesgo))
-st.dataframe(fidelidad_riesgo[["SKU_ID","Categoria","Stock_Actual","Satisfaccion_NPS"]])
 
-fig, ax = plt.subplots(figsize=(8,4))
-ax.scatter(fidelidad_riesgo["Stock_Actual"], fidelidad_riesgo["Satisfaccion_NPS"], color="purple")
+# ---------- 4️⃣ Diagnóstico de Fidelidad ----------
+st.subheader("4️⃣ Diagnóstico de Fidelidad: Stock Alto vs. Satisfacción Baja")
+
+# Verificar que inv y fb_sku existan
+if 'inv' not in locals() or 'fb_sku' not in locals():
+    st.error("❌ No se han cargado Inventario Central o Feedback por SKU. Ejecuta Fase 2 primero.")
+    st.stop()
+
+# Normalizar nombres de categorías
+if 'Categoria' in inv.columns:
+    inv["Categoria"] = inv["Categoria"].fillna("").str.lower().str.replace("-", "").str.strip()
+    inv["Categoria"] = inv["Categoria"].replace({
+        "smartphone": "smartphone",
+        "smartphones": "smartphone"
+    })
+else:
+    st.error("❌ Columna 'Categoria' no encontrada en Inventario")
+    st.stop()
+
+# Merge con feedback por SKU
+df_fidelidad = inv.merge(
+    fb_sku.groupby("SKU_ID")["Satisfaccion_NPS"].mean().reset_index(),
+    on="SKU_ID",
+    how="left"
+)
+
+# Filtro de riesgo: stock alto (percentil 75) y NPS bajo (percentil 25)
+stock_p75 = df_fidelidad["Stock_Actual"].quantile(0.75)
+nps_p25 = df_fidelidad["Satisfaccion_NPS"].quantile(0.25)
+
+fidelidad_riesgo = df_fidelidad[
+    (df_fidelidad["Stock_Actual"] > stock_p75) &
+    (df_fidelidad["Satisfaccion_NPS"] < nps_p25)
+].copy()
+
+# Agrupar por categoría para dashboard
+categoria_summary = fidelidad_riesgo.groupby("Categoria").agg(
+    Cantidad_SKU=("SKU_ID","count"),
+    Stock_Total=("Stock_Actual","sum"),
+    NPS_Promedio=("Satisfaccion_NPS","mean")
+).reset_index()
+
+categoria_summary = categoria_summary.sort_values(["Cantidad_SKU","NPS_Promedio"], ascending=[False,True])
+
+# Mostrar tabla
+st.subheader("📋 Categorías Críticas")
+st.dataframe(categoria_summary, use_container_width=True, hide_index=True)
+
+# Gráfico: Stock vs NPS
+st.subheader("📍 Matriz de Riesgo: Stock vs Satisfacción")
+fig, ax = plt.subplots(figsize=(10,6))
+
+# Todos los SKUs
+ax.scatter(
+    df_fidelidad["Stock_Actual"],
+    df_fidelidad["Satisfaccion_NPS"],
+    alpha=0.5,
+    s=50,
+    color='blue',
+    label='Todos los SKUs'
+)
+
+# SKUs en riesgo
+if not fidelidad_riesgo.empty:
+    ax.scatter(
+        fidelidad_riesgo["Stock_Actual"],
+        fidelidad_riesgo["Satisfaccion_NPS"],
+        s=100,
+        color='red',
+        label=f'En Riesgo ({len(fidelidad_riesgo)})',
+        zorder=5
+    )
+
+# Líneas de referencia
+ax.axhline(y=nps_p25, color='orange', linestyle='--', label=f'NPS Bajo ({nps_p25:.0f})')
+ax.axvline(x=stock_p75, color='green', linestyle='--', label=f'Stock Alto ({stock_p75:.0f})')
+
 ax.set_xlabel("Stock Actual")
 ax.set_ylabel("Satisfacción NPS")
-ax.set_title("Paradoja Stock Alto vs Sentimiento Negativo")
+ax.set_title("Identificación de SKUs Problemáticos")
+ax.legend()
+ax.grid(True, alpha=0.3)
+
 st.pyplot(fig)
 
-# ---------- 5. Storytelling Riesgo Operativo Mejorado ----------
-st.subheader("5️⃣ Storytelling de Riesgo Operativo (Visual Avanzado)")
-
-# Preparar datos de riesgo desde transacciones + feedback
-# Primero, contar tickets por SKU_ID
-tickets_sku = fb_sku.groupby("SKU_ID")["Ticket_Soporte_Abierto"].sum().reset_index()
-tickets_sku.columns = ["SKU_ID", "Tickets_Abiertos"]
-
-# Merge con inventario para obtener Bodega_Origen y Stock_Actual
-inv_cols_needed = ["SKU_ID", "Bodega_Origen", "Stock_Actual", "Ultima_Revision"] if all(c in inv.columns for c in ["SKU_ID", "Bodega_Origen", "Stock_Actual", "Ultima_Revision"]) else []
-
-if not inv_cols_needed:
-    # Si faltan columnas, usar solo las disponibles
-    inv_cols_needed = [c for c in ["SKU_ID", "Bodega_Origen", "Stock_Actual", "Ultima_Revision"] if c in inv.columns]
-
-if inv_cols_needed:
-    df_riesgo_temp = tickets_sku.merge(inv[inv_cols_needed], on="SKU_ID", how="left")
-    
-    # Agrupar por Bodega_Origen si existe
-    if "Bodega_Origen" in df_riesgo_temp.columns:
-        df_riesgo = df_riesgo_temp.groupby("Bodega_Origen").agg({
-            "Tickets_Abiertos": "sum",
-            "Stock_Actual": "sum" if "Stock_Actual" in df_riesgo_temp.columns else lambda x: 0,
-            "Ultima_Revision": "max" if "Ultima_Revision" in df_riesgo_temp.columns else lambda x: None
-        }).reset_index()
-    else:
-        st.warning("⚠️ Columna 'Bodega_Origen' no disponible en inventario")
-        df_riesgo = df_riesgo_temp.copy()
+# Recomendaciones rápidas
+st.subheader("🎯 Análisis Rápido")
+if not fidelidad_riesgo.empty:
+    st.success(f"**Se encontraron {len(fidelidad_riesgo)} SKUs en riesgo**")
+    st.write("**Categorías más afectadas:**")
+    for idx, row in categoria_summary.head(3).iterrows():
+        st.write(f"- **{row['Categoria'].capitalize()}**: {row['Cantidad_SKU']} SKUs, NPS: {row['NPS_Promedio']:.0f}")
 else:
-    st.warning("⚠️ Columnas requeridas no disponibles en inventario para análisis de riesgo")
-    df_riesgo = pd.DataFrame()
+    st.info("✅ No se encontraron SKUs con alto stock y baja satisfacción")
 
-if not df_riesgo.empty:
-    # Procesar fechas si Ultima_Revision existe
-    if "Ultima_Revision" in df_riesgo.columns:
-        df_riesgo["Ultima_Revision"] = pd.to_datetime(df_riesgo["Ultima_Revision"], errors="coerce")
-        df_riesgo["Dias_Ultima_Revision"] = (pd.Timestamp.today() - df_riesgo["Ultima_Revision"]).dt.days
-        df_riesgo["Dias_Ultima_Revision"] = df_riesgo["Dias_Ultima_Revision"].fillna(0)
-    else:
-        df_riesgo["Dias_Ultima_Revision"] = 0
-    
-    df_riesgo["Stock_Total"] = df_riesgo.get("Stock_Actual", 0)
-    df_riesgo["Riesgo"] = df_riesgo["Tickets_Abiertos"] * (df_riesgo["Dias_Ultima_Revision"] + 1)
+# Botón de exportación
+if not fidelidad_riesgo.empty:
+    csv = fidelidad_riesgo[['SKU_ID','Categoria','Stock_Actual','Satisfaccion_NPS']].to_csv(index=False)
+    st.download_button(
+        label="📥 Exportar SKUs en Riesgo",
+        data=csv,
+        file_name="skus_riesgo.csv",
+        mime="text/csv"
+    )
 
-    # Scatter plot con storytelling
-    fig, ax = plt.subplots(figsize=(10,6))
-    
-    if len(df_riesgo) > 0:
-        scatter = ax.scatter(
-            df_riesgo["Dias_Ultima_Revision"], 
-            df_riesgo["Tickets_Abiertos"], 
-            s=(df_riesgo["Stock_Total"].fillna(0) / 10).clip(lower=50),
-            c=df_riesgo["Riesgo"],
-            cmap="Reds",
-            alpha=0.7,
-            edgecolor="black"
-        )
+    st.info("Asegúrate de tener cargados los datasets de Inventario Central y Feedback de Clientes.") 
 
-        # Añadir etiquetas de bodega si existen
-        if "Bodega_Origen" in df_riesgo.columns:
-            for i, row in df_riesgo.iterrows():
-                ax.text(row["Dias_Ultima_Revision"]+0.5, row["Tickets_Abiertos"], row["Bodega_Origen"], fontsize=9)
 
-        ax.set_xlabel("Días desde Última Revisión")
-        ax.set_ylabel("Tickets de Soporte Abiertos")
-        ax.set_title("Riesgo Operativo: SKUs con Tickets vs Antigüedad (Tamaño=Stock, Color=Riesgo)")
-        cbar = plt.colorbar(scatter)
-        cbar.set_label("Riesgo (Tickets x Días)")
-    
-    st.pyplot(fig)
+# ---------- Asegurar que las columnas existan ----------
+for col in ["Stock_Actual", "Satisfaccion_NPS", "Calidad_Producto", "Precio_Unitario"]:
+    if col not in df_fidelidad.columns:
+        df_fidelidad[col] = 0  # Placeholder si falta
 
-    # Mostrar tabla ordenada por riesgo
-    display_cols = [c for c in ["Bodega_Origen", "Dias_Ultima_Revision", "Tickets_Abiertos", "Stock_Total", "Riesgo"] if c in df_riesgo.columns]
-    if display_cols:
-        st.dataframe(df_riesgo.sort_values("Riesgo", ascending=False)[display_cols])
-else:
-    st.info("📊 Sin datos suficientes para análisis de riesgo operativo")
+# También asegurarnos que fidelidad_riesgo tenga esas columnas
+for col in ["Stock_Actual", "Satisfaccion_NPS", "Calidad_Producto", "Precio_Unitario"]:
+    if col not in fidelidad_riesgo.columns:
+        fidelidad_riesgo[col] = df_fidelidad[col]
 
+# ---------- Scatter 1: Y = Calidad ----------
+st.subheader("📍 Stock vs Calidad de Producto (Destacando SKUs en Riesgo)")
+
+fig1, ax1 = plt.subplots(figsize=(10,6))
+
+# Scatter normal (azul)
+ax1.scatter(
+    df_fidelidad.loc[~df_fidelidad.index.isin(fidelidad_riesgo.index), "Stock_Actual"],
+    df_fidelidad.loc[~df_fidelidad.index.isin(fidelidad_riesgo.index), "Calidad_Producto"],
+    color='blue',
+    s=60,
+    alpha=0.7,
+    label="Normal"
+)
+
+# Scatter SKUs en riesgo (rojo)
+if len(fidelidad_riesgo) > 0:
+    ax1.scatter(
+        fidelidad_riesgo["Stock_Actual"],
+        fidelidad_riesgo["Calidad_Producto"],
+        color='red',
+        s=80,
+        edgecolors='black',
+        linewidth=1.2,
+        label=f'En Riesgo ({len(fidelidad_riesgo)} SKUs)'
+    )
+
+# Línea de referencia de stock alto
+ax1.axvline(x=stock_p75, color='green', linestyle='--', alpha=0.7, label=f'Stock Alto ({stock_p75:.0f})')
+
+ax1.set_xlabel("Stock Actual")
+ax1.set_ylabel("Calidad del Producto (Rating Promedio)")
+ax1.set_title("Stock vs Calidad de Producto")
+ax1.legend()
+ax1.grid(True, alpha=0.3)
+
+st.pyplot(fig1)
+
+# ---------- Scatter 2: Y = Precio ----------
+st.subheader("📍 Stock vs Precio Unitario (Destacando SKUs en Riesgo)")
+
+fig2, ax2 = plt.subplots(figsize=(10,6))
+
+# Scatter normal (azul)
+ax2.scatter(
+    df_fidelidad.loc[~df_fidelidad.index.isin(fidelidad_riesgo.index), "Stock_Actual"],
+    df_fidelidad.loc[~df_fidelidad.index.isin(fidelidad_riesgo.index), "Precio_Unitario"],
+    color='blue',
+    s=60,
+    alpha=0.7,
+    label="Normal"
+)
+
+# Scatter SKUs en riesgo (rojo)
+if len(fidelidad_riesgo) > 0:
+    ax2.scatter(
+        fidelidad_riesgo["Stock_Actual"],
+        fidelidad_riesgo["Precio_Unitario"],
+        color='red',
+        s=80,
+        edgecolors='black',
+        linewidth=1.2,
+        label=f'En Riesgo ({len(fidelidad_riesgo)} SKUs)'
+    )
+
+# Línea de referencia de stock alto
+ax2.axvline(x=stock_p75, color='green', linestyle='--', alpha=0.7, label=f'Stock Alto ({stock_p75:.0f})')
+
+ax2.set_xlabel("Stock Actual")
+ax2.set_ylabel("Precio Unitario (USD)")
+ax2.set_title("Stock vs Precio Unitario")
+ax2.legend()
+ax2.grid(True, alpha=0.3)
+
+st.pyplot(fig2)
 
 
