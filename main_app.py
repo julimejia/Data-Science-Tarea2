@@ -526,24 +526,43 @@ st.pyplot(fig)
 # ---------- 5. Storytelling Riesgo Operativo ----------
 st.subheader("5️⃣ Storytelling de Riesgo Operativo")
 
-df_riesgo = inv.merge(fb.groupby("Bodega_Origen")["Ticket_Soporte_Abierto"].sum().reset_index(), on="Bodega_Origen", how="left")
+# Merge fb with trx to get Bodega_Origen
+fb_con_bodega = fb.merge(
+    trx[["Transaccion_ID", "Bodega_Origen"]],
+    on="Transaccion_ID",
+    how="left"
+)
+
+# Agregar tickets por bodega
+tickets_bodega = fb_con_bodega.groupby("Bodega_Origen")["Ticket_Soporte_Abierto"].sum().reset_index()
+
+# Merge con inventory para obtener Ultima_Revision
+df_riesgo = inv[["Bodega_Origen", "Ultima_Revision"]].drop_duplicates().merge(
+    tickets_bodega,
+    on="Bodega_Origen",
+    how="left"
+)
+
 df_riesgo["Ultima_Revision"] = pd.to_datetime(df_riesgo["Ultima_Revision"], errors="coerce")
 df_riesgo["Dias_Ultima_Revision"] = (pd.Timestamp.today() - df_riesgo["Ultima_Revision"]).dt.days
-df_riesgo["Ticket_Soporte_Abierto"] = df_riesgo["Ticket_Soporte_Abierto"].fillna(0)
+df_riesgo["Ticket_Soporte_Abierto"] = df_riesgo["Ticket_Soporte_Abierto"].fillna(0).astype(int)
 
 # Gráfico combinado
-fig, ax1 = plt.subplots(figsize=(10,4))
-ax1.bar(df_riesgo["Bodega_Origen"], df_riesgo["Ticket_Soporte_Abierto"], color="red", alpha=0.6, label="Tickets de Soporte")
-ax2 = ax1.twinx()
-ax2.plot(df_riesgo["Bodega_Origen"], df_riesgo["Dias_Ultima_Revision"], color="blue", marker="o", label="Días Última Revisión")
-ax1.set_ylabel("Tickets de Soporte")
-ax2.set_ylabel("Días Última Revisión")
-ax1.set_xticklabels(df_riesgo["Bodega_Origen"], rotation=45, ha="right")
-ax1.set_title("Riesgo Operativo: Tickets vs Antigüedad de Revisión")
-fig.tight_layout()
-st.pyplot(fig)
+if not df_riesgo.empty:
+    fig, ax1 = plt.subplots(figsize=(10,4))
+    ax1.bar(df_riesgo["Bodega_Origen"], df_riesgo["Ticket_Soporte_Abierto"], color="red", alpha=0.6, label="Tickets de Soporte")
+    ax2 = ax1.twinx()
+    ax2.plot(df_riesgo["Bodega_Origen"], df_riesgo["Dias_Ultima_Revision"], color="blue", marker="o", label="Días Última Revisión")
+    ax1.set_ylabel("Tickets de Soporte")
+    ax2.set_ylabel("Días Última Revisión")
+    ax1.set_xticklabels(df_riesgo["Bodega_Origen"], rotation=45, ha="right")
+    ax1.set_title("Riesgo Operativo: Tickets vs Antigüedad de Revisión")
+    fig.tight_layout()
+    st.pyplot(fig)
 
-st.dataframe(df_riesgo[["Bodega_Origen","Dias_Ultima_Revision","Ticket_Soporte_Abierto"]])
+    st.dataframe(df_riesgo[["Bodega_Origen","Dias_Ultima_Revision","Ticket_Soporte_Abierto"]])
+else:
+    st.warning("⚠️ Sin datos de bodegas para análisis de riesgo")
 
 
 
