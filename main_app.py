@@ -421,7 +421,7 @@ if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" 
     )
 
 # =============================================================================
-# FASE 3 – Análisis Avanzado y Storytelling
+# ========================= FASE 3 – STORYTELLING AVANZADO ==================
 # =============================================================================
 
 if "Feedback de Clientes" in datasets_disponibles:
@@ -434,31 +434,38 @@ else:
         "Edad_Cliente","Satisfaccion_NPS"
     ])
 
-if not fb.empty and not trx.empty:
-    fb_sku = fb.merge(
-        trx[["Transaccion_ID", "SKU_ID"]],
-        on="Transaccion_ID",
-        how="left"
-    )
+# Aseguramos que trx exista
+if "Transacciones Logísticas" in datasets_disponibles:
+    trx = datasets["Transacciones Logísticas"]["clean"].copy()
 else:
-    fb_sku = pd.DataFrame(columns=["Feedback_ID","Transaccion_ID","SKU_ID","Satisfaccion_NPS"])
+    trx = pd.DataFrame(columns=[
+        "Transaccion_ID","SKU_ID","Fecha_Venta","Cantidad_Vendida",
+        "Precio_Venta_Final","Costo_Envio","Tiempo_Entrega_Real",
+        "Estado_Envio","Ciudad_Destino","Canal_Venta"
+    ])
+
+# Normalizamos IDs para merge
+fb["Transaccion_ID"] = fb["Transaccion_ID"].astype(str).str.strip()
+trx["Transaccion_ID"] = trx["Transaccion_ID"].astype(str).str.strip()
+trx["SKU_ID"] = trx["SKU_ID"].astype(str).str.strip()
+
+# Merge Feedback + Transacciones para traer SKU_ID a Feedback
+fb_sku = fb.merge(trx[["Transaccion_ID","SKU_ID"]], on="Transaccion_ID", how="left")
 
 st.header("📊 Fase 3 – Storytelling Avanzado")
 
-# Aseguramos que merged ya tenga todas las variables derivadas
+# Verificamos merged
 if "merged" not in locals():
     st.warning("⚠️ Necesitas haber ejecutado la fase 2 para generar 'merged'.")
     st.stop()
 
 # ---------- 1. Fuga de Capital ----------
 st.subheader("1️⃣ Fuga de Capital y Rentabilidad")
-
 negativos = merged[merged["Margen_Utilidad"] < 0].copy()
 st.metric("SKUs con margen negativo", len(negativos))
 st.metric("Ingreso en riesgo (USD)", f"{negativos['Ingreso'].sum():,.0f}")
 st.metric("% Ingreso en riesgo", f"{(negativos['Ingreso'].sum()/merged['Ingreso'].sum())*100:.2f}%")
 
-# Gráfico llamativo de margen negativo vs positivo
 fig, ax = plt.subplots(figsize=(6,4))
 margen_counts = merged["Margen_Utilidad"].apply(lambda x: "Negativo" if x<0 else "Positivo").value_counts()
 ax.bar(margen_counts.index, margen_counts.values, color=["red","green"])
@@ -470,18 +477,15 @@ st.dataframe(negativos[["SKU_ID","Cantidad_Vendida","Ingreso","Costo_Total","Mar
 
 # ---------- 2. Crisis Logística ----------
 st.subheader("2️⃣ Crisis Logística y Cuellos de Botella")
-
-log_merge = merged.merge(fb[["Transaccion_ID","Satisfaccion_NPS"]], on="Transaccion_ID", how="left")
+log_merge = merged.merge(fb_sku[["Transaccion_ID","Satisfaccion_NPS"]], on="Transaccion_ID", how="left")
 log_merge["Tiempo_Entrega_Real"] = log_merge["Tiempo_Entrega_Real"].fillna(0)
 log_merge["Satisfaccion_NPS"] = log_merge["Satisfaccion_NPS"].fillna(0)
 
-# Correlación por ciudad
 corr_ciudad = log_merge.groupby("Ciudad_Destino")[["Tiempo_Entrega_Real","Satisfaccion_NPS"]].corr().iloc[0::2,-1]
 corr_ciudad = corr_ciudad.reset_index().rename(columns={"Satisfaccion_NPS":"Corr_Entrega_NPS"})
 st.markdown("**Correlación Tiempo de Entrega vs NPS por Ciudad**")
 st.dataframe(corr_ciudad.sort_values("Corr_Entrega_NPS"))
 
-# Gráfico de ciudades críticas
 fig, ax = plt.subplots(figsize=(8,4))
 top_ciudades = corr_ciudad.sort_values("Corr_Entrega_NPS").head(10)
 ax.barh(top_ciudades["Ciudad_Destino"], top_ciudades["Corr_Entrega_NPS"], color="orange")
@@ -491,14 +495,12 @@ st.pyplot(fig)
 
 # ---------- 3. Venta Invisible ----------
 st.subheader("3️⃣ Análisis de la Venta Invisible")
-
 ingreso_total = merged["Ingreso"].sum()
 ingreso_fantasma = merged.loc[merged["sku_status"]=="FANTASMA","Ingreso"].sum()
 st.metric("Ingreso total (USD)", f"{ingreso_total:,.0f}")
 st.metric("Ingreso en riesgo (USD)", f"{ingreso_fantasma:,.0f}")
 st.metric("% Ingreso en riesgo", f"{(ingreso_fantasma/ingreso_total)*100:.2f}%")
 
-# Gráfico de barras de ingresos por tipo de SKU
 fig, ax = plt.subplots(figsize=(6,4))
 ingresos_tipo = merged.groupby("sku_status")["Ingreso"].sum()
 ax.bar(ingresos_tipo.index, ingresos_tipo.values, color=["red","green"])
@@ -508,14 +510,12 @@ st.pyplot(fig)
 
 # ---------- 4. Diagnóstico de Fidelidad ----------
 st.subheader("4️⃣ Diagnóstico de Fidelidad")
-
-df_fidelidad = inv.merge(fb.groupby("SKU_ID")["Satisfaccion_NPS"].mean().reset_index(), on="SKU_ID", how="left")
-fidelidad_riesgo = df_fidelidad[(df_fidelidad["Stock_Actual"] > df_fidelidad["Stock_Actual"].median()) & 
+df_fidelidad = inv.merge(fb_sku.groupby("SKU_ID")["Satisfaccion_NPS"].mean().reset_index(), on="SKU_ID", how="left")
+fidelidad_riesgo = df_fidelidad[(df_fidelidad["Stock_Actual"] > df_fidelidad["Stock_Actual"].median()) &
                                 (df_fidelidad["Satisfaccion_NPS"] < 50)]
 st.metric("SKUs con stock alto pero NPS bajo", len(fidelidad_riesgo))
 st.dataframe(fidelidad_riesgo[["SKU_ID","Categoria","Stock_Actual","Satisfaccion_NPS"]])
 
-# Gráfico
 fig, ax = plt.subplots(figsize=(8,4))
 ax.scatter(fidelidad_riesgo["Stock_Actual"], fidelidad_riesgo["Satisfaccion_NPS"], color="purple")
 ax.set_xlabel("Stock Actual")
@@ -525,13 +525,11 @@ st.pyplot(fig)
 
 # ---------- 5. Storytelling Riesgo Operativo ----------
 st.subheader("5️⃣ Storytelling de Riesgo Operativo")
-
-df_riesgo = inv.merge(fb.groupby("Bodega_Origen")["Ticket_Soporte_Abierto"].sum().reset_index(), on="Bodega_Origen", how="left")
+df_riesgo = inv.merge(fb_sku.groupby("Bodega_Origen")["Ticket_Soporte_Abierto"].sum().reset_index(), on="Bodega_Origen", how="left")
 df_riesgo["Ultima_Revision"] = pd.to_datetime(df_riesgo["Ultima_Revision"], errors="coerce")
 df_riesgo["Dias_Ultima_Revision"] = (pd.Timestamp.today() - df_riesgo["Ultima_Revision"]).dt.days
 df_riesgo["Ticket_Soporte_Abierto"] = df_riesgo["Ticket_Soporte_Abierto"].fillna(0)
 
-# Gráfico combinado
 fig, ax1 = plt.subplots(figsize=(10,4))
 ax1.bar(df_riesgo["Bodega_Origen"], df_riesgo["Ticket_Soporte_Abierto"], color="red", alpha=0.6, label="Tickets de Soporte")
 ax2 = ax1.twinx()
@@ -544,6 +542,7 @@ fig.tight_layout()
 st.pyplot(fig)
 
 st.dataframe(df_riesgo[["Bodega_Origen","Dias_Ultima_Revision","Ticket_Soporte_Abierto"]])
+
 
 
 
