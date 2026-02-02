@@ -77,31 +77,96 @@ with st.sidebar:
 # =============================================================================
 
 def cargar_feedback(file):
+    """
+    Carga y limpia datos de feedback:
+    - Filtra edades inválidas (< 0 o > 110)
+    """
     df = pd.read_csv(file)
+    filas_originales = len(df)
+    
+    # Filtrar edades válidas
     df_limpio = df[(df["Edad_Cliente"] >= 0) & (df["Edad_Cliente"] <= 110)].copy()
-    return df, df_limpio, len(df) - len(df_limpio)
+    
+    filas_eliminadas = filas_originales - len(df_limpio)
+    return df, df_limpio, filas_eliminadas
 
 def cargar_inventario(file):
+    """
+    Carga y limpia datos de inventario:
+    - Elimina fila con índice 500 (outlier extremo)
+    - Imputa Stock_Actual negativo usando mediana por categoría
+    - Elimina filas con múltiples inconsistencias
+    """
     df = pd.read_csv(file)
     df_limpio = df.copy()
     filas_eliminadas = 0
 
+    # 1. Eliminar fila 500
     if 500 in df_limpio.index:
         df_limpio = df_limpio.drop(index=500)
         filas_eliminadas += 1
 
-    mask = df_limpio["Stock_Actual"] < 0
-    filas_eliminadas += mask.sum()
-    df_limpio = df_limpio[~mask]
+    # 2. Identificar filas con múltiples anomalías (Stock_Actual < 0 Y Lead_Time_Dias NaN)
+    mask_multi_anomalia = (df_limpio["Stock_Actual"] < 0) & (df_limpio["Lead_Time_Dias"].isna())
+    filas_eliminadas += mask_multi_anomalia.sum()
+    df_limpio = df_limpio[~mask_multi_anomalia]
+
+    # 3. Imputar Stock_Actual negativo donde Costo_Unitario_USD está en rango razonable
+    if "Categoria" in df_limpio.columns and "Costo_Unitario_USD" in df_limpio.columns:
+        median_stock = (
+            df_limpio["Stock_Actual"]
+            .where(df_limpio["Stock_Actual"] >= 0)  # negivos -> NaN
+            .groupby(df_limpio["Categoria"])
+            .transform("median")
+        )
+        
+        q1_costo = df_limpio.groupby("Categoria")["Costo_Unitario_USD"].transform(lambda s: s.quantile(0.25))
+        q3_costo = df_limpio.groupby("Categoria")["Costo_Unitario_USD"].transform(lambda s: s.quantile(0.75))
+        
+        mask_imputar = (df_limpio["Stock_Actual"] < 0) & (df_limpio["Costo_Unitario_USD"].between(q1_costo, q3_costo, inclusive="both"))
+        df_limpio.loc[mask_imputar, "Stock_Actual"] = median_stock[mask_imputar]
+
+    # 4. Eliminar stock negativo residual
+    mask_stock_neg = df_limpio["Stock_Actual"] < 0
+    filas_eliminadas += mask_stock_neg.sum()
+    df_limpio = df_limpio[~mask_stock_neg]
 
     return df, df_limpio, filas_eliminadas
 
 def cargar_transacciones(file):
+    """
+    Carga y limpia datos de transacciones:
+    - Parsea columnas de fecha
+    - Elimina transacciones con cantidad negativa Y costo envío NaN
+    - Elimina transacciones con cantidad negativa Y tiempo entrega > 100 días
+    - Filtra transacciones con fecha futura
+    """
     df = pd.read_csv(file)
+    filas_originales = len(df)
+    
+    # 1. Parsear fechas
     for col in df.columns:
         if "fecha" in col.lower():
             df[col] = pd.to_datetime(df[col], errors="coerce")
-    return df, df.copy(), 0
+    
+    df_limpio = df.copy()
+    
+    # 2. Eliminar (Cantidad_Vendida < 0 AND Costo_Envio NaN)
+    if "Cantidad_Vendida" in df_limpio.columns and "Costo_Envio" in df_limpio.columns:
+        mask1 = (df_limpio["Cantidad_Vendida"] < 0) & (df_limpio["Costo_Envio"].isna())
+        df_limpio = df_limpio[~mask1]
+    
+    # 3. Eliminar (Cantidad_Vendida < 0 AND Tiempo_Entrega_Real > 100)
+    if "Cantidad_Vendida" in df_limpio.columns and "Tiempo_Entrega_Real" in df_limpio.columns:
+        mask2 = (df_limpio["Cantidad_Vendida"] < 0) & (df_limpio["Tiempo_Entrega_Real"] > 100)
+        df_limpio = df_limpio[~mask2]
+    
+    # 4. Filtrar transacciones con fecha futura
+    if "Fecha_Venta" in df_limpio.columns:
+        df_limpio = df_limpio[df_limpio["Fecha_Venta"] <= pd.Timestamp.now()]
+    
+    filas_eliminadas = filas_originales - len(df_limpio)
+    return df, df_limpio, filas_eliminadas
 
 # =============================================================================
 # HEALTHCHECK – CONTROL DE CALIDAD DE DATOS (PROFUNDO)
@@ -219,85 +284,120 @@ for name, (file, loader, required_cols) in FILES_CONFIG.items():
 # =============================================================================
 # VISUALIZACIÓN DEL HEALTHCHECK (PROFUNDO)
 # =============================================================================
-st.subheader("📋 Estado de Calidad de los Datos")
+st.subheader("📋 FASE 1 – Ingesta, Limpieza y Control de Calidad")
 
+# Mostrar estado de carga
+st.markdown("### 1️⃣ Estado de Carga de Archivos")
 cols = st.columns(3)
 for col, (name, status) in zip(cols, health_status.items()):
     with col:
         if status == "ok":
-            hc = datasets[name]["health"]
-            st.success(f"✅ {name}\nScore: {hc['health_score']}")
-            
-            with st.expander("📊 Detalles Completos"):
-                # Basic metrics
-                st.markdown(f"""
-                **Métricas Básicas**
-                - Filas: {hc['rows']}
-                - Columnas: {hc['cols']}
-                - Duplicados: {hc['duplicates']}
-                - Filas eliminadas: {hc['filas_eliminadas']}
-                """)
-                
-                # Memory
-                if hc.get("memory_bytes") is not None:
-                    mb = round(hc["memory_bytes"] / (1024 ** 2), 2)
-                    st.metric("Memoria Estimada", f"{mb} MB")
-                
-                # Missing values table
-                missing_pct = {k: v for k, v in hc["missing_pct"].items() if v > 0}
-                if missing_pct:
-                    st.markdown("**Valores Faltantes (% por columna)**")
-                    sorted_missing = dict(sorted(missing_pct.items(), key=lambda x: x[1], reverse=True))
-                    st.table(pd.DataFrame(list(sorted_missing.items()), columns=["Columna", "% Missing"]))
-                else:
-                    st.info("✅ Sin valores faltantes")
-                
-                # Numeric summary
-                if hc.get("numeric_summary"):
-                    st.markdown("**Resumen de Columnas Numéricas**")
-                    num_df = pd.DataFrame(hc["numeric_summary"]).T
-                    st.dataframe(num_df.style.format({
-                        "mean": "{:.2f}",
-                        "std": "{:.2f}",
-                        "min": "{:.2f}",
-                        "max": "{:.2f}",
-                        "pct_zeros": "{:.1f}%"
-                    }), use_container_width=True)
-                
-                # Categorical summary
-                if hc.get("categorical_summary"):
-                    st.markdown("**Resumen de Columnas Categóricas**")
-                    cat_rows = []
-                    for col, meta in hc["categorical_summary"].items():
-                        tops = ", ".join([f"{v[0]} ({v[1]})" for v in meta["top_values"]]) if meta["top_values"] else "N/A"
-                        cat_rows.append({"Columna": col, "Únicos": meta["unique"], "Top 3": tops})
-                    st.table(pd.DataFrame(cat_rows))
-                
-                # Date issues
-                if hc.get("date_issues"):
-                    di = {k: v for k, v in hc["date_issues"].items() if v["nat_count"] > 0}
-                    if di:
-                        st.markdown("**Problemas de Fecha (NaT)**")
-                        st.table(pd.DataFrame(di).T)
-                
-                # Suggestions
-                if hc.get("suggestions"):
-                    st.markdown("**🔍 Sugerencias de Limpieza**")
-                    for s in hc["suggestions"]:
-                        st.write(f"⚠️ {s}")
-                
+            st.success(f"✅ {name}")
         elif status == "missing":
-            st.warning(f"⚠️ {name} no cargado")
+            st.warning(f"⚠️ {name}\nNo cargado")
         else:
-            st.error(f"❌ {name} inválido")
-            hc = datasets.get(name, {}).get("health")
-            if hc and hc.get("missing_required_cols"):
-                st.write(f"Columnas faltantes: {hc['missing_required_cols']}")
+            st.error(f"❌ {name}\nInválido")
 
 datasets_disponibles = [k for k, v in health_status.items() if v == "ok"]
 
 if not datasets_disponibles:
     st.stop()
+
+# Mostrar proceso de limpieza y health check antes/después
+st.markdown("### 2️⃣ Proceso de Limpieza y Control de Calidad")
+
+for name in datasets_disponibles:
+    with st.expander(f"📊 {name} - Limpieza y Health Check"):
+        hc_raw = run_healthcheck(datasets[name]["raw"], FILES_CONFIG.get(name, (None, None, None))[2])
+        hc_clean = datasets[name]["health"]
+        
+        # Resumen de limpieza
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Filas Originales", hc_raw["rows"])
+        col2.metric("Filas Eliminadas", hc_clean["filas_eliminadas"])
+        col3.metric("Filas Finales", hc_clean["rows"])
+        
+        # Comparación de health scores
+        st.markdown("#### Health Score: Antes vs Después")
+        col_before, col_after = st.columns(2)
+        
+        with col_before:
+            st.metric("Health Score (Raw)", hc_raw["health_score"], delta=None)
+            st.markdown("**Raw Data Metrics:**")
+            st.write(f"- Columnas: {hc_raw['cols']}")
+            st.write(f"- Duplicados: {hc_raw['duplicates']}")
+            
+            missing_raw = {k: v for k, v in hc_raw["missing_pct"].items() if v > 0}
+            if missing_raw:
+                st.write(f"- Valores faltantes: {len(missing_raw)} columnas")
+            else:
+                st.write("- Valores faltantes: 0")
+        
+        with col_after:
+            st.metric("Health Score (Clean)", hc_clean["health_score"], delta=round(hc_clean["health_score"] - hc_raw["health_score"], 2))
+            st.markdown("**Clean Data Metrics:**")
+            st.write(f"- Columnas: {hc_clean['cols']}")
+            st.write(f"- Duplicados: {hc_clean['duplicates']}")
+            
+            missing_clean = {k: v for k, v in hc_clean["missing_pct"].items() if v > 0}
+            if missing_clean:
+                st.write(f"- Valores faltantes: {len(missing_clean)} columnas")
+            else:
+                st.write("- Valores faltantes: 0")
+        
+        # Detalles completos del raw data
+        with st.expander("📈 Detalles Raw Data"):
+            st.markdown(f"**Métricas Básicas**")
+            st.write(f"- Memoria: {round(hc_raw['memory_bytes']/(1024**2), 2) if hc_raw.get('memory_bytes') else 'N/A'} MB")
+            
+            missing_pct_raw = {k: v for k, v in hc_raw["missing_pct"].items() if v > 0}
+            if missing_pct_raw:
+                st.markdown("**Valores Faltantes (% por columna)**")
+                sorted_missing = dict(sorted(missing_pct_raw.items(), key=lambda x: x[1], reverse=True))
+                st.table(pd.DataFrame(list(sorted_missing.items()), columns=["Columna", "% Missing"]))
+            
+            if hc_raw.get("numeric_summary"):
+                st.markdown("**Resumen Numérico**")
+                num_df = pd.DataFrame(hc_raw["numeric_summary"]).T
+                st.dataframe(num_df.style.format({
+                    "mean": "{:.2f}",
+                    "std": "{:.2f}",
+                    "min": "{:.2f}",
+                    "max": "{:.2f}",
+                    "pct_zeros": "{:.1f}%"
+                }), use_container_width=True)
+        
+        # Detalles completos del clean data
+        with st.expander("📈 Detalles Clean Data"):
+            st.markdown(f"**Métricas Básicas**")
+            st.write(f"- Memoria: {round(hc_clean['memory_bytes']/(1024**2), 2) if hc_clean.get('memory_bytes') else 'N/A'} MB")
+            
+            missing_pct_clean = {k: v for k, v in hc_clean["missing_pct"].items() if v > 0}
+            if missing_pct_clean:
+                st.markdown("**Valores Faltantes (% por columna)**")
+                sorted_missing = dict(sorted(missing_pct_clean.items(), key=lambda x: x[1], reverse=True))
+                st.table(pd.DataFrame(list(sorted_missing.items()), columns=["Columna", "% Missing"]))
+            else:
+                st.info("✅ Sin valores faltantes en datos limpios")
+            
+            if hc_clean.get("numeric_summary"):
+                st.markdown("**Resumen Numérico**")
+                num_df = pd.DataFrame(hc_clean["numeric_summary"]).T
+                st.dataframe(num_df.style.format({
+                    "mean": "{:.2f}",
+                    "std": "{:.2f}",
+                    "min": "{:.2f}",
+                    "max": "{:.2f}",
+                    "pct_zeros": "{:.1f}%"
+                }), use_container_width=True)
+            
+            # Sugerencias
+            if hc_clean.get("suggestions"):
+                st.markdown("**🔍 Sugerencias Adicionales**")
+                for s in hc_clean["suggestions"]:
+                    st.write(f"⚠️ {s}")
+
+st.markdown("---")
 
 # =============================================================================
 # ========================= FASE 2 – SKU Fantasma + Variables Derivadas =======
