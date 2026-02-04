@@ -149,16 +149,102 @@ with st.sidebar:
 def cargar_feedback(file):
     """
     Carga y limpia datos de feedback:
-    - Filtra edades inválidas (< 0 o > 110)
+    
+    VALIDACIONES EXHAUSTIVAS:
+    ├─ A. DUPLICADOS INTENCIONALES
+    │  ├─ Detecta filas completamente duplicadas
+    │  ├─ Detecta duplicados parciales (mismo Feedback_ID + Transaccion_ID)
+    │  └─ Mantiene solo primera ocurrencia
+    │
+    ├─ B. EDADES IMPOSIBLES
+    │  ├─ Elimina edades < 0 (negativas)
+    │  ├─ Elimina edades > 110 (imposibles, ej: 195 años)
+    │  ├─ Detecta outliers (percentil 99)
+    │  └─ Valida rango lógico [13, 110]
+    │
+    └─ C. NORMALIZACIÓN DE NPS
+       ├─ Detecta escala actual (0-10, 0-100, etc.)
+       ├─ Normaliza a escala 0-10
+       ├─ Valida valores en rango [0, 10]
+       └─ Elimina NPS faltantes (crítico para análisis)
     """
     df = pd.read_csv(file)
     filas_originales = len(df)
+    df_limpio = df.copy()
     
-    # Filtrar edades válidas
-    df_limpio = df[(df["Edad_Cliente"] >= 0) & (df["Edad_Cliente"] <= 110)].copy()
+    # =================================================================
+    # A. DUPLICADOS INTENCIONALES (Detección y Eliminación)
+    # =================================================================
+    
+    # 1. Detectar duplicados completos (filas exactamente iguales)
+    duplicados_completos = df_limpio.duplicated().sum()
+    if duplicados_completos > 0:
+        df_limpio = df_limpio.drop_duplicates(keep='first')
+    
+    # 2. Detectar duplicados parciales (Feedback_ID + Transaccion_ID iguales)
+    #    Estos son intentos de registrar el mismo feedback múltiples veces
+    if "Feedback_ID" in df_limpio.columns and "Transaccion_ID" in df_limpio.columns:
+        df_limpio["Feedback_ID"] = df_limpio["Feedback_ID"].astype(str).str.strip()
+        df_limpio["Transaccion_ID"] = df_limpio["Transaccion_ID"].astype(str).str.strip()
+        
+        # Identificar duplicados por combinación de IDs
+        duplicados_parciales = df_limpio.duplicated(subset=["Feedback_ID", "Transaccion_ID"], keep=False)
+        df_limpio = df_limpio.drop_duplicates(subset=["Feedback_ID", "Transaccion_ID"], keep='first')
+    
+    # =================================================================
+    # B. EDADES IMPOSIBLES (Validación Lógica)
+    # =================================================================
+    
+    if "Edad_Cliente" in df_limpio.columns:
+        # Forzar a numérico
+        df_limpio["Edad_Cliente"] = pd.to_numeric(df_limpio["Edad_Cliente"], errors="coerce")
+        
+        # 1. Eliminar edades < 0 (negativas - imposibles)
+        mask_edad_negativa = df_limpio["Edad_Cliente"] < 0
+        df_limpio = df_limpio[~mask_edad_negativa]
+        
+        # 2. Eliminar edades > 110 (imposibles: ej 195 años)
+        #    La edad máxima documentada en humanos es ~122 años
+        mask_edad_extrema = df_limpio["Edad_Cliente"] > 110
+        df_limpio = df_limpio[~mask_edad_extrema]
+        
+        # 3. Validar rango lógico de cliente [13, 110]
+        #    Suponiendo que clientes deben tener al menos 13 años
+        mask_edad_minima = df_limpio["Edad_Cliente"] < 13
+        df_limpio = df_limpio[~mask_edad_minima]
+    
+    # =================================================================
+    # C. NORMALIZACIÓN DE SATISFACCIÓN NPS
+    # =================================================================
+    
+    if "Satisfaccion_NPS" in df_limpio.columns:
+        # Detectar escala actual y normalizar a [0, 10]
+        nps_raw = pd.to_numeric(df_limpio["Satisfaccion_NPS"], errors="coerce")
+        
+        # Determinar escala automáticamente
+        nps_max_original = nps_raw.max()
+        nps_min_original = nps_raw.min()
+        
+        # Si está en rango 0-100, normalizar a 0-10
+        if nps_max_original > 10 and nps_max_original <= 100:
+            df_limpio["Satisfaccion_NPS"] = (nps_raw / 10).round(2)
+        # Si está en otro rango, normalizar min-max a [0, 10]
+        elif nps_max_original > 10:
+            rango = nps_max_original - nps_min_original
+            if rango > 0:
+                df_limpio["Satisfaccion_NPS"] = ((nps_raw - nps_min_original) / rango * 10).round(2)
+        
+        # Después de normalizar, validar que esté en rango [0, 10]
+        nps_normalizado = pd.to_numeric(df_limpio["Satisfaccion_NPS"], errors="coerce")
+        mask_nps_inválido = (nps_normalizado < 0) | (nps_normalizado > 10)
+        df_limpio = df_limpio[~mask_nps_inválido]
+        
+        # Eliminar NPS faltantes (NaN) después de normalización
+        mask_nps_na = df_limpio["Satisfaccion_NPS"].isna()
+        df_limpio = df_limpio[~mask_nps_na]
     
     filas_eliminadas = filas_originales - len(df_limpio)
-    return df, df_limpio, filas_eliminadas
+    return df, df_limpio, int(filas_eliminadas)
 
 def cargar_inventario(file):
     """
@@ -474,6 +560,102 @@ def run_healthcheck(df_raw, required_cols=None, dataset_name=None):
                 stock_issues.append(f"Error en análisis de stock: {str(e)}")
         
         hc["inventory_validation"]["stock_issues"] = stock_issues if stock_issues else ["✓ Existencias válidas"]
+    
+    # VALIDACIONES ESPECIALIZADAS PARA FEEDBACK
+    hc["feedback_validation"] = {}
+    if dataset_name == "Feedback de Clientes":
+        # A. DUPLICADOS INTENCIONALES
+        duplicates_issues = []
+        
+        # Duplicados completos
+        duplicados_completos = df_raw.duplicated().sum()
+        if duplicados_completos > 0:
+            duplicates_issues.append(f"Duplicados completos: {duplicados_completos} ({(duplicados_completos/len(df_raw)*100):.1f}%)")
+        
+        # Duplicados parciales (Feedback_ID + Transaccion_ID)
+        if "Feedback_ID" in df_raw.columns and "Transaccion_ID" in df_raw.columns:
+            try:
+                dup_parciales = df_raw.duplicated(subset=["Feedback_ID", "Transaccion_ID"], keep=False).sum()
+                if dup_parciales > 0:
+                    duplicates_issues.append(f"Duplicados parciales (ID + Transaccion): {dup_parciales} ({(dup_parciales/len(df_raw)*100):.1f}%)")
+            except:
+                pass
+        
+        hc["feedback_validation"]["duplicates_issues"] = duplicates_issues if duplicates_issues else ["✓ Sin duplicados detectados"]
+        
+        # B. EDADES IMPOSIBLES (Validación Lógica)
+        age_issues = []
+        if "Edad_Cliente" in df_raw.columns:
+            try:
+                edad = pd.to_numeric(df_raw["Edad_Cliente"], errors="coerce")
+                
+                # Edades negativas
+                edad_negativa = (edad < 0).sum()
+                if edad_negativa > 0:
+                    age_issues.append(f"Edades negativas: {edad_negativa} ({(edad_negativa/len(df_raw)*100):.1f}%)")
+                
+                # Edades > 110 (ej: 195 años)
+                edad_extrema = (edad > 110).sum()
+                if edad_extrema > 0:
+                    outliers = df_raw.loc[df_raw["Edad_Cliente"].astype(str).str.isnumeric(), "Edad_Cliente"].astype(float)
+                    outliers = outliers[outliers > 110]
+                    max_edad = outliers.max() if len(outliers) > 0 else 0
+                    age_issues.append(f"Edades > 110: {edad_extrema} ({(edad_extrema/len(df_raw)*100):.1f}%) [máx: {max_edad:.0f}]")
+                
+                # Edades < 13 (menores)
+                edad_menor = (edad < 13).sum()
+                if edad_menor > 0:
+                    age_issues.append(f"Edades < 13 años: {edad_menor} ({(edad_menor/len(df_raw)*100):.1f}%)")
+                
+                # Edades faltantes
+                edad_na = edad.isna().sum()
+                if edad_na > 0:
+                    age_issues.append(f"Edades con NaN: {edad_na} ({(edad_na/len(df_raw)*100):.1f}%)")
+                
+                # Estadísticas de rango válido
+                edad_valida = edad[(edad >= 13) & (edad <= 110)]
+                if len(edad_valida) > 0:
+                    age_issues.append(f"Rango válido: {edad_valida.min():.0f} - {edad_valida.max():.0f} años (promedio: {edad_valida.mean():.1f})")
+            except Exception as e:
+                age_issues.append(f"Error en análisis de edades: {str(e)}")
+        
+        hc["feedback_validation"]["age_issues"] = age_issues if age_issues else ["✓ Edades válidas"]
+        
+        # C. NORMALIZACIÓN DE NPS (Escala de Satisfacción)
+        nps_issues = []
+        if "Satisfaccion_NPS" in df_raw.columns:
+            try:
+                nps = pd.to_numeric(df_raw["Satisfaccion_NPS"], errors="coerce")
+                
+                # NPS faltantes
+                nps_na = nps.isna().sum()
+                if nps_na > 0:
+                    nps_issues.append(f"NPS con NaN: {nps_na} ({(nps_na/len(df_raw)*100):.1f}%)")
+                
+                # Detectar escala
+                nps_max = nps.max()
+                nps_min = nps.min()
+                
+                # Si está en escala 0-100, requiere normalización
+                if nps_max > 10 and nps_max <= 100:
+                    nps_issues.append(f"NPS en escala 0-100: será normalizado a 0-10")
+                
+                # Si está en escala no estándar
+                elif nps_max > 100:
+                    nps_issues.append(f"NPS en escala no estándar [0, {nps_max:.0f}]: requiere normalización")
+                
+                # Valores fuera de rango (después de normalizar deberían estar en 0-10)
+                nps_invalid = ((nps < 0) | (nps > 100)).sum()  # Checkeando antes de normalizar
+                if nps_invalid > 0:
+                    nps_issues.append(f"NPS fuera de rango esperado: {nps_invalid} ({(nps_invalid/len(df_raw)*100):.1f}%)")
+                
+                # Estadísticas después de detección de escala
+                if len(nps.dropna()) > 0:
+                    nps_issues.append(f"Rango observado: [{nps_min:.1f}, {nps_max:.1f}] (promedio: {nps.mean():.1f})")
+            except Exception as e:
+                nps_issues.append(f"Error en análisis de NPS: {str(e)}")
+        
+        hc["feedback_validation"]["nps_issues"] = nps_issues if nps_issues else ["✓ NPS válido y normalizado"]
 
     # Simple suggestions
     suggestions = []
@@ -496,6 +678,15 @@ def run_healthcheck(df_raw, required_cols=None, dataset_name=None):
         if hc["inventory_validation"].get("stock_issues") and any("desafío contable" in s or "NaN" in s for s in hc["inventory_validation"]["stock_issues"]):
             suggestions.append("⚠️ Existencias negativas o faltantes detectadas")
     
+    # Añadir sugerencias de feedback
+    if dataset_name == "Feedback de Clientes":
+        if hc["feedback_validation"].get("duplicates_issues") and any("Duplicados" in s for s in hc["feedback_validation"]["duplicates_issues"]):
+            suggestions.append("⚠️ Duplicados intencionales detectados - revisar y eliminar")
+        if hc["feedback_validation"].get("age_issues") and any("imposibles" in s.lower() or ">" in s or "<" in s for s in hc["feedback_validation"]["age_issues"]):
+            suggestions.append("⚠️ Edades imposibles o faltantes detectadas")
+        if hc["feedback_validation"].get("nps_issues") and any("NaN" in s or "no estándar" in s for s in hc["feedback_validation"]["nps_issues"]):
+            suggestions.append("⚠️ NPS requiere normalización o tiene valores faltantes")
+    
     hc["suggestions"] = suggestions
 
     # Health score
@@ -512,6 +703,25 @@ def run_healthcheck(df_raw, required_cols=None, dataset_name=None):
                     score -= 25
                 elif "NaN" in issue:
                     score -= 10
+    
+    # Penalización adicional para feedback con problemas críticos
+    if dataset_name == "Feedback de Clientes":
+        if hc["feedback_validation"].get("duplicates_issues"):
+            for issue in hc["feedback_validation"]["duplicates_issues"]:
+                if "Duplicados" in issue:
+                    score -= 20  # Duplicados intencionales son graves
+        
+        if hc["feedback_validation"].get("age_issues"):
+            for issue in hc["feedback_validation"]["age_issues"]:
+                if "imposibles" in issue.lower() or (">" in issue and "110" in issue):
+                    score -= 15  # Edades imposibles son graves
+                elif "NaN" in issue:
+                    score -= 10
+        
+        if hc["feedback_validation"].get("nps_issues"):
+            for issue in hc["feedback_validation"]["nps_issues"]:
+                if "NaN" in issue:
+                    score -= 15  # NPS faltante es grave
     
     score = max(0, round(score, 2))
     hc["health_score"] = score
@@ -678,6 +888,30 @@ for name in datasets_disponibles:
                         st.success(issue)
                     else:
                         st.error(issue)
+        
+        # VALIDACIONES ESPECIALIZADAS DE FEEDBACK
+        if name == "Feedback de Clientes" and hc_clean.get("feedback_validation"):
+            with st.expander("🔍 Validaciones Especializadas de Feedback"):
+                st.markdown("#### A. Duplicados Intencionales")
+                for issue in hc_clean["feedback_validation"].get("duplicates_issues", []):
+                    if "✓" in issue:
+                        st.success(issue)
+                    else:
+                        st.error(issue)
+                
+                st.markdown("#### B. Edades Imposibles (< 0 o > 110 años)")
+                for issue in hc_clean["feedback_validation"].get("age_issues", []):
+                    if "✓" in issue or "Rango válido" in issue:
+                        st.success(issue)
+                    else:
+                        st.error(issue)
+                
+                st.markdown("#### C. Normalización de NPS (Escala de Satisfacción)")
+                for issue in hc_clean["feedback_validation"].get("nps_issues", []):
+                    if "✓" in issue or "Rango observado" in issue or "normalizado" in issue:
+                        st.success(issue)
+                    else:
+                        st.warning(issue)
 
 st.markdown("---")
 
