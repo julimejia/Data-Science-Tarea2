@@ -163,28 +163,94 @@ def cargar_feedback(file):
 def cargar_inventario(file):
     """
     Carga y limpia datos de inventario:
-    - Elimina fila con índice 500 (outlier extremo: Costo_Unitario_USD > 85000)
-    - Elimina filas con múltiples anomalías (Stock_Actual < 0 Y Lead_Time_Dias NaN)
-    - Imputa Stock_Actual negativo usando mediana por categoría cuando costo está en Q1-Q3
-    - Elimina stock negativo residual
+    
+    VALIDACIONES EXHAUSTIVAS:
+    ├─ A. INCONSISTENCIAS DE TIPO
+    │  ├─ Parsea columnas de fecha (Ultima_Revision, Fecha_Ingreso)
+    │  ├─ Valida Lead_Time_Dias como numérico (no fechas mezcladas)
+    │  └─ Detecta valores de texto en columnas numéricas de costo/stock
+    │
+    ├─ B. COSTOS ATÍPICOS ($0.01 - $850k)
+    │  ├─ Elimina costos <= $0.00 (lógica contable: debe haber valor)
+    │  ├─ Elimina costos > $850,000 (outliers extremos - fila 500)
+    │  └─ Detecta costos en rango válido Q1-Q3 para imputación
+    │
+    └─ C. EXISTENCIAS NEGATIVAS (Desafío a lógica contable)
+       ├─ Elimina stock < 0 con Lead_Time NaN (datos irrecuperables)
+       ├─ Imputa stock < 0 si costo está en Q1-Q3 (datos parcialmente confiables)
+       └─ Elimina stock < 0 residual (datos sin base para reconstruir)
     """
     df = pd.read_csv(file)
     filas_originales = len(df)
     df_limpio = df.copy()
-
-    # 1. ELIMINAR FILA 500 (extremo outlier con Costo_Unitario_USD > 85000)
+    
+    # =================================================================
+    # A. VALIDACIÓN DE TIPOS DE DATOS (Fechas vs Números Mezclados)
+    # =================================================================
+    
+    # 1. Parsear columnas de fecha (case-insensitive)
+    fecha_cols = [col for col in df_limpio.columns if "fecha" in col.lower() or "revision" in col.lower()]
+    for col in fecha_cols:
+        if col in df_limpio.columns:
+            df_limpio[col] = pd.to_datetime(df_limpio[col], errors="coerce")
+    
+    # 2. Forzar Lead_Time_Dias como numérico (eliminar strings de fechas que pudieron colarse)
+    if "Lead_Time_Dias" in df_limpio.columns:
+        # Intentar conversión numérica; si falla, marca como NaN
+        df_limpio["Lead_Time_Dias"] = pd.to_numeric(df_limpio["Lead_Time_Dias"], errors="coerce")
+        # Validar rango lógico: lead time debe estar entre 0 y 365 días
+        mask_lead_inválido = (df_limpio["Lead_Time_Dias"] < 0) | (df_limpio["Lead_Time_Dias"] > 365)
+        df_limpio.loc[mask_lead_inválido, "Lead_Time_Dias"] = None
+    
+    # 3. Validar Stock_Actual como numérico
+    if "Stock_Actual" in df_limpio.columns:
+        df_limpio["Stock_Actual"] = pd.to_numeric(df_limpio["Stock_Actual"], errors="coerce")
+        # Stock no puede ser negativo; llenar NaN inicialmente
+        df_limpio["Stock_Actual"] = df_limpio["Stock_Actual"].fillna(-999)  # marker temporal
+    
+    # 4. Validar Costo_Unitario_USD como numérico
+    if "Costo_Unitario_USD" in df_limpio.columns:
+        df_limpio["Costo_Unitario_USD"] = pd.to_numeric(df_limpio["Costo_Unitario_USD"], errors="coerce")
+    
+    # =================================================================
+    # B. COSTOS ATÍPICOS (Rango $0.01 - $850,000)
+    # =================================================================
+    
+    # 1. Eliminar costos <= $0.00 (violación lógica contable)
+    if "Costo_Unitario_USD" in df_limpio.columns:
+        mask_costo_cero = df_limpio["Costo_Unitario_USD"] <= 0
+        df_limpio = df_limpio[~mask_costo_cero]
+    
+    # 2. Eliminar costos > $850,000 (outliers extremos)
+    if "Costo_Unitario_USD" in df_limpio.columns:
+        mask_costo_extremo = df_limpio["Costo_Unitario_USD"] > 850000
+        df_limpio = df_limpio[~mask_costo_extremo]
+    
+    # 3. Eliminar fila con índice 500 si existe (mecanismo de seguridad adicional)
     if 500 in df_limpio.index:
         df_limpio = df_limpio.drop(index=500)
-
-    # 2. ELIMINAR FILAS CON MÚLTIPLES ANOMALÍAS (Stock_Actual < 0 AND Lead_Time_Dias NaN)
-    #    Estas filas tienen demasiadas inconsistencias para imputar confiablemente
-    mask_multi = (df_limpio["Stock_Actual"] < 0) & (df_limpio["Lead_Time_Dias"].isna())
-    df_limpio = df_limpio[~mask_multi]
-
-    # 3. IMPUTAR Stock_Actual negativo con mediana por categoría
-    #    SOLO si el Costo_Unitario_USD está en el rango Q1-Q3 de su categoría
-    if "Categoria" in df_limpio.columns and "Costo_Unitario_USD" in df_limpio.columns and "Stock_Actual" in df_limpio.columns:
-        # Calcular mediana de stock positivo por categoría (excluye negativos)
+    
+    # =================================================================
+    # C. EXISTENCIAS NEGATIVAS (Lógica Contable Violada)
+    # =================================================================
+    
+    # 1. ELIMINAR FILAS CON MÚLTIPLES ANOMALÍAS
+    #    (Stock < 0 AND Lead_Time NaN AND Costo atípico)
+    #    → Estos datos son irrecuperables
+    if "Stock_Actual" in df_limpio.columns and "Lead_Time_Dias" in df_limpio.columns:
+        mask_multi = (df_limpio["Stock_Actual"] < 0) & (df_limpio["Lead_Time_Dias"].isna())
+        if "Costo_Unitario_USD" in df_limpio.columns:
+            mask_costo_fuera = (df_limpio["Costo_Unitario_USD"] < 0.01) | (df_limpio["Costo_Unitario_USD"] > 850000)
+            mask_multi = mask_multi | ((df_limpio["Stock_Actual"] < 0) & mask_costo_fuera)
+        df_limpio = df_limpio[~mask_multi]
+    
+    # 2. IMPUTAR Stock negativo con MEDIANA POR CATEGORÍA
+    #    SOLO si el Costo está en rango razonable (Q1-Q3)
+    if ("Categoria" in df_limpio.columns and 
+        "Costo_Unitario_USD" in df_limpio.columns and 
+        "Stock_Actual" in df_limpio.columns):
+        
+        # Calcular mediana de stock positivo por categoría
         median_stock = (
             df_limpio["Stock_Actual"]
             .where(df_limpio["Stock_Actual"] >= 0)  # negativos → NaN
@@ -192,19 +258,25 @@ def cargar_inventario(file):
             .transform("median")
         )
         
-        # Calcular Q1 y Q3 de Costo por categoría
+        # Calcular Q1 y Q3 de Costo por categoría (rango razonable)
         q1_costo = df_limpio.groupby("Categoria")["Costo_Unitario_USD"].transform(lambda s: s.quantile(0.25))
         q3_costo = df_limpio.groupby("Categoria")["Costo_Unitario_USD"].transform(lambda s: s.quantile(0.75))
         
-        # Máscara: stock negativo AND costo en rango razonable (Q1-Q3)
+        # Máscara: stock negativo AND costo en rango Q1-Q3
         mask_imputar = (df_limpio["Stock_Actual"] < 0) & (df_limpio["Costo_Unitario_USD"].between(q1_costo, q3_costo, inclusive="both"))
         
-        # Aplicar la imputación (reemplazar stock negativo con la mediana)
+        # Aplicar imputación
         df_limpio.loc[mask_imputar, "Stock_Actual"] = median_stock[mask_imputar]
-
-    # 4. ELIMINAR stock negativo RESIDUAL (los que no pudieron imputarse)
-    #    Estos son valores sin mediana disponible o costo fuera de rango Q1-Q3
-    df_limpio = df_limpio[df_limpio["Stock_Actual"] >= 0]
+    
+    # 3. ELIMINAR STOCK NEGATIVO RESIDUAL
+    #    → Datos sin base para reconstruir (sin mediana de categoría o costo fuera de rango)
+    if "Stock_Actual" in df_limpio.columns:
+        mask_stock_negativo = df_limpio["Stock_Actual"] < 0
+        df_limpio = df_limpio[~mask_stock_negativo]
+    
+    # Limpiar marker temporal de Stock_Actual
+    if "Stock_Actual" in df_limpio.columns:
+        df_limpio["Stock_Actual"] = df_limpio["Stock_Actual"].replace(-999, None)
 
     filas_eliminadas = filas_originales - len(df_limpio)
     return df, df_limpio, int(filas_eliminadas)
@@ -253,10 +325,14 @@ def cargar_transacciones(file):
 # =============================================================================
 # HEALTHCHECK – CONTROL DE CALIDAD DE DATOS (PROFUNDO)
 # =============================================================================
-def run_healthcheck(df_raw, required_cols=None):
+def run_healthcheck(df_raw, required_cols=None, dataset_name=None):
     """
     Comprehensive health check including memory, numeric/categorical summaries,
     date parse issues, and actionable suggestions.
+    
+    VALIDACIONES ESPECIALIZADAS:
+    - Para Inventario: detecta costos atípicos, inconsistencias de tipo, stock negativo
+    - Para otros datasets: validaciones generales
     """
     hc = {}
     hc["rows"] = len(df_raw)
@@ -318,6 +394,87 @@ def run_healthcheck(df_raw, required_cols=None):
     hc["missing_required_cols"] = missing_required
     hc["status"] = "ok" if not missing_required else "invalid"
 
+    # VALIDACIONES ESPECIALIZADAS PARA INVENTARIO
+    hc["inventory_validation"] = {}
+    if dataset_name == "Inventario Central":
+        # A. INCONSISTENCIAS DE TIPO
+        type_issues = []
+        
+        # Lead_Time_Dias debe ser numérico, no fechas
+        if "Lead_Time_Dias" in df_raw.columns:
+            lead_time_na = df_raw["Lead_Time_Dias"].isna().sum()
+            if lead_time_na > 0:
+                type_issues.append(f"Lead_Time_Dias con NaN: {lead_time_na} ({(lead_time_na/len(df_raw)*100):.1f}%)")
+            # Validar rango lógico: 0-365 días
+            try:
+                lead_numeric = pd.to_numeric(df_raw["Lead_Time_Dias"], errors="coerce")
+                invalid_lead = ((lead_numeric < 0) | (lead_numeric > 365)).sum()
+                if invalid_lead > 0:
+                    type_issues.append(f"Lead_Time_Dias fuera de rango [0-365]: {invalid_lead} ({(invalid_lead/len(df_raw)*100):.1f}%)")
+            except:
+                pass
+        
+        # Ultima_Revision debe ser fecha, no numérica
+        if "Ultima_Revision" in df_raw.columns:
+            try:
+                nat_dates = pd.to_datetime(df_raw["Ultima_Revision"], errors="coerce").isna().sum()
+                if nat_dates > len(df_raw) * 0.1:
+                    type_issues.append(f"Ultima_Revision con parse errors: {nat_dates} ({(nat_dates/len(df_raw)*100):.1f}%)")
+            except:
+                pass
+        
+        hc["inventory_validation"]["type_issues"] = type_issues if type_issues else ["✓ Sin inconsistencias de tipo detectadas"]
+        
+        # B. COSTOS ATÍPICOS ($0.01 - $850k)
+        cost_issues = []
+        if "Costo_Unitario_USD" in df_raw.columns:
+            try:
+                costo = pd.to_numeric(df_raw["Costo_Unitario_USD"], errors="coerce")
+                
+                # Costos <= $0.00
+                costo_cero = (costo <= 0).sum()
+                if costo_cero > 0:
+                    cost_issues.append(f"Costos <= $0.00: {costo_cero} ({(costo_cero/len(df_raw)*100):.1f}%)")
+                
+                # Costos > $850k
+                costo_extremo = (costo > 850000).sum()
+                if costo_extremo > 0:
+                    cost_issues.append(f"Costos > $850,000: {costo_extremo} ({(costo_extremo/len(df_raw)*100):.1f}%)")
+                
+                # Estadísticas de rango válido
+                costo_valido = costo[(costo > 0) & (costo <= 850000)]
+                if len(costo_valido) > 0:
+                    cost_issues.append(f"Rango válido: ${costo_valido.min():.2f} - ${costo_valido.max():.2f}")
+            except Exception as e:
+                cost_issues.append(f"Error en análisis de costos: {str(e)}")
+        
+        hc["inventory_validation"]["cost_issues"] = cost_issues if cost_issues else ["✓ Costos dentro de rango válido"]
+        
+        # C. EXISTENCIAS NEGATIVAS
+        stock_issues = []
+        if "Stock_Actual" in df_raw.columns:
+            try:
+                stock = pd.to_numeric(df_raw["Stock_Actual"], errors="coerce")
+                stock_negativo = (stock < 0).sum()
+                stock_cero = (stock == 0).sum()
+                stock_na = stock.isna().sum()
+                
+                if stock_negativo > 0:
+                    stock_issues.append(f"Stock < 0 (desafío contable): {stock_negativo} ({(stock_negativo/len(df_raw)*100):.1f}%)")
+                if stock_cero > 0:
+                    stock_issues.append(f"Stock = 0 (sin existencias): {stock_cero} ({(stock_cero/len(df_raw)*100):.1f}%)")
+                if stock_na > 0:
+                    stock_issues.append(f"Stock con NaN: {stock_na} ({(stock_na/len(df_raw)*100):.1f}%)")
+                
+                # Estadísticas
+                stock_valido = stock[stock > 0]
+                if len(stock_valido) > 0:
+                    stock_issues.append(f"Existencias activas: min={stock_valido.min():.0f}, promedio={stock_valido.mean():.0f}, máx={stock_valido.max():.0f}")
+            except Exception as e:
+                stock_issues.append(f"Error en análisis de stock: {str(e)}")
+        
+        hc["inventory_validation"]["stock_issues"] = stock_issues if stock_issues else ["✓ Existencias válidas"]
+
     # Simple suggestions
     suggestions = []
     if hc["duplicates"] > 0:
@@ -330,6 +487,15 @@ def run_healthcheck(df_raw, required_cols=None):
     if hc.get("memory_bytes") and hc["memory_bytes"] > 200_000_000:
         suggestions.append("Large memory usage: consider downcasting types or sampling")
     
+    # Añadir sugerencias de inventario
+    if dataset_name == "Inventario Central":
+        if hc["inventory_validation"].get("type_issues") and any("inconsistencias" in s for s in hc["inventory_validation"]["type_issues"]):
+            suggestions.append("⚠️ Revisar inconsistencias de tipo (Lead_Time como texto o fechas)")
+        if hc["inventory_validation"].get("cost_issues") and any("$" in s for s in hc["inventory_validation"]["cost_issues"]):
+            suggestions.append("⚠️ Costos fuera del rango válido detectados")
+        if hc["inventory_validation"].get("stock_issues") and any("desafío contable" in s or "NaN" in s for s in hc["inventory_validation"]["stock_issues"]):
+            suggestions.append("⚠️ Existencias negativas o faltantes detectadas")
+    
     hc["suggestions"] = suggestions
 
     # Health score
@@ -337,6 +503,16 @@ def run_healthcheck(df_raw, required_cols=None):
     if hc["missing_pct"]:
         score -= sum(hc["missing_pct"].values()) / 10
     score -= hc["duplicates"] * 0.5
+    
+    # Penalización adicional para inventario con problemas críticos
+    if dataset_name == "Inventario Central":
+        if hc["inventory_validation"].get("stock_issues"):
+            for issue in hc["inventory_validation"]["stock_issues"]:
+                if "desafío contable" in issue:
+                    score -= 25
+                elif "NaN" in issue:
+                    score -= 10
+    
     score = max(0, round(score, 2))
     hc["health_score"] = score
 
@@ -357,7 +533,7 @@ for name, (file, loader, required_cols) in FILES_CONFIG.items():
         continue
 
     df_raw, df_clean, filas_eliminadas = loader(file)
-    health_clean = run_healthcheck(df_clean, required_cols)
+    health_clean = run_healthcheck(df_clean, required_cols, dataset_name=name)
     health_clean["filas_eliminadas"] = filas_eliminadas
 
     datasets[name] = {"raw": df_raw, "clean": df_clean, "health": health_clean}
@@ -390,7 +566,7 @@ st.markdown("### 2️⃣ Proceso de Limpieza y Control de Calidad")
 
 for name in datasets_disponibles:
     with st.expander(f"📊 {name} - Limpieza y Health Check"):
-        hc_raw = run_healthcheck(datasets[name]["raw"], FILES_CONFIG.get(name, (None, None, None))[2])
+        hc_raw = run_healthcheck(datasets[name]["raw"], FILES_CONFIG.get(name, (None, None, None))[2], dataset_name=name)
         hc_clean = datasets[name]["health"]
         
         # Resumen de limpieza
@@ -478,6 +654,30 @@ for name in datasets_disponibles:
                 st.markdown("**🔍 Sugerencias Adicionales**")
                 for s in hc_clean["suggestions"]:
                     st.write(f"⚠️ {s}")
+        
+        # VALIDACIONES ESPECIALIZADAS DE INVENTARIO
+        if name == "Inventario Central" and hc_clean.get("inventory_validation"):
+            with st.expander("🔍 Validaciones Especializadas de Inventario"):
+                st.markdown("#### A. Inconsistencias de Tipo (Fechas vs Lead Times)")
+                for issue in hc_clean["inventory_validation"].get("type_issues", []):
+                    if "✓" in issue:
+                        st.success(issue)
+                    else:
+                        st.warning(issue)
+                
+                st.markdown("#### B. Costos Atípicos ($0.01 - $850k)")
+                for issue in hc_clean["inventory_validation"].get("cost_issues", []):
+                    if "✓" in issue or "Rango válido" in issue:
+                        st.success(issue)
+                    else:
+                        st.error(issue)
+                
+                st.markdown("#### C. Existencias Negativas (Lógica Contable)")
+                for issue in hc_clean["inventory_validation"].get("stock_issues", []):
+                    if "✓" in issue or "Existencias activas" in issue:
+                        st.success(issue)
+                    else:
+                        st.error(issue)
 
 st.markdown("---")
 
