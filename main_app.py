@@ -325,13 +325,27 @@ def cargar_feedback(file):
     
     if "Satisfaccion_NPS" in df_limpio.columns:
         nps_raw = pd.to_numeric(df_limpio["Satisfaccion_NPS"], errors="coerce")
-        nps_max_original = nps_raw.max()
-        nps_min_original = nps_raw.min()
         
-        # PASO 6: Normalización de escala (0-100 → 0-10)
+        # PASO 6A: Aplicar valor absoluto a NPS negativos (convertir a positivo)
+        nps_raw_abs = nps_raw.abs()
+        df_limpio["Satisfaccion_NPS"] = nps_raw_abs
+        
+        logger.log_step(
+            step_name="Aplicar Valor Absoluto a NPS (convertir negativos a positivos)",
+            rows_before=len(df_limpio),
+            rows_after=len(df_limpio),
+            reason="NPS negativo es inconsistencia de entrada, no refleja insatisfacción. Aplicar abs() preserva datos y los convierte a escala válida.",
+            method="df.abs() - transforma NPS negativo en positivo sin eliminar",
+            details=f"Ej: NPS=-5 → NPS=5. Preserva información original con corrección de signo."
+        )
+        
+        nps_max_original = nps_raw_abs.max()
+        nps_min_original = nps_raw_abs.min()
+        
+        # PASO 6B: Normalización de escala (0-100 → 0-10)
         if nps_max_original > 10 and nps_max_original <= 100:
             filas_antes_nps_norm = len(df_limpio)
-            df_limpio["Satisfaccion_NPS"] = (nps_raw / 10).round(2)
+            df_limpio["Satisfaccion_NPS"] = (nps_raw_abs / 10).round(2)
             filas_despues_nps_norm = len(df_limpio)  # Sin eliminación, solo transformación
             
             logger.log_step(
@@ -347,7 +361,7 @@ def cargar_feedback(file):
             filas_antes_nps_ext = len(df_limpio)
             rango = nps_max_original - nps_min_original
             if rango > 0:
-                df_limpio["Satisfaccion_NPS"] = ((nps_raw - nps_min_original) / rango * 10).round(2)
+                df_limpio["Satisfaccion_NPS"] = ((nps_raw_abs - nps_min_original) / rango * 10).round(2)
             filas_despues_nps_ext = len(df_limpio)
             
             logger.log_step(
@@ -381,14 +395,16 @@ def cargar_feedback(file):
         df_limpio = df_limpio[~mask_nps_inválido]
         filas_despues_nps_rango = len(df_limpio)
         
-        logger.log_step(
-            step_name="Eliminar NPS Fuera de Rango [0, 10]",
-            rows_before=filas_antes_nps_rango,
-            rows_after=filas_despues_nps_rango,
-            reason="NPS después de normalización debe estar en [0, 10]. Valores fuera = error de conversión o dato corrupto.",
-            method="Máscara booleana: (NPS < 0) OR (NPS > 10), filtrado con operador ~",
-            details=f"{filas_antes_nps_rango - filas_despues_nps_rango} registros fuera de rango. Probable: error en normalización o dato extraño."
-        )
+        if filas_antes_nps_rango - filas_despues_nps_rango > 0:
+            logger.log_step(
+                step_name="Eliminar NPS Fuera de Rango [0, 10] (después de normalización)",
+                rows_before=filas_antes_nps_rango,
+                rows_after=filas_despues_nps_rango,
+                reason="NPS después de normalización debe estar en [0, 10]. Valores fuera = error de conversión o dato corrupto.",
+                method="Máscara booleana: (NPS < 0) OR (NPS > 10), filtrado con operador ~",
+                details=f"{filas_antes_nps_rango - filas_despues_nps_rango} registros fuera de rango. Probable: error en normalización o dato extraño."
+            )
+
     
     filas_eliminadas = filas_originales - len(df_limpio)
     return df, df_limpio, int(filas_eliminadas), logger.to_dict()
