@@ -367,43 +367,106 @@ def cargar_inventario(file):
     filas_eliminadas = filas_originales - len(df_limpio)
     return df, df_limpio, int(filas_eliminadas)
 
-def cargar_transacciones(file):
+def cargar_transacciones(file, df_inventario=None):
     """
-    Carga y limpia datos de transacciones:
-    - Parsea TODAS las columnas de fecha
-    - Elimina transacciones con anomalías de cantidad/costo
-    - Elimina transacciones con entregas extremadamente atrasadas
-    - Filtra transacciones con fecha futura
+    Carga y limpia datos de transacciones logísticas:
+    
+    VALIDACIONES:
+    1. INTEGRIDAD REFERENCIAL: Verifica que SKUs existan en inventario oficial
+    2. FORMATO DE FECHAS: Normaliza múltiples formatos de fecha (DD/MM/YYYY, YYYY-MM-DD, etc.)
+    3. OUTLIERS DE ENTREGA: Detecta y maneja tiempos extremos (>100 días, outliers 999 días)
+    
+    LÓGICA:
+    - Elimina transacciones sin cantidad/costo válidos
+    - Marca transacciones con SKU fantasma (para trazabilidad)
+    - Elimina entregas con outliers extremos (>120% del P95)
     """
     df = pd.read_csv(file)
     filas_originales = len(df)
     df_limpio = df.copy()
     
-    # 1. Parsear TODAS las columnas con "fecha" (case-insensitive)
-    for col in df_limpio.columns:
-        if "fecha" in col.lower():
-            df_limpio[col] = pd.to_datetime(df_limpio[col], errors="coerce")
+    # =======================================================================
+    # 1. NORMALIZACIÓN DE FORMATOS DE FECHA
+    # =======================================================================
+    fecha_cols = [col for col in df_limpio.columns if "fecha" in col.lower()]
+    for col in fecha_cols:
+        # Intentar múltiples formatos
+        if col in df_limpio.columns:
+            df_limpio[col] = pd.to_datetime(
+                df_limpio[col], 
+                errors="coerce",
+                infer_datetime_format=True
+            )
     
-    # 2. Eliminar filas con cantidad negativa Y costo envío NaN
-    #    (anomalía: sin cantidad positiva y sin justificación de costo)
+    # =======================================================================
+    # 2. INTEGRIDAD REFERENCIAL: VALIDAR SKUs CONTRA INVENTARIO
+    # =======================================================================
+    sku_fantasma_count = 0
+    if "SKU_ID" in df_limpio.columns:
+        # Si tenemos dataset de inventario limpio, marcar SKUs no encontrados
+        if df_inventario is not None and "SKU_ID" in df_inventario.columns:
+            skus_validos = set(df_inventario["SKU_ID"].dropna().unique())
+            mask_sku_fantasma = ~df_limpio["SKU_ID"].isin(skus_validos)
+            sku_fantasma_count = mask_sku_fantasma.sum()
+            
+            # Crear columna de trazabilidad (no eliminar, pero marcar)
+            df_limpio["SKU_Fantasma"] = mask_sku_fantasma
+            
+            # Eliminar transacciones donde SKU es NaN o vacío
+            mask_sku_na = df_limpio["SKU_ID"].isna() | (df_limpio["SKU_ID"] == "")
+            df_limpio = df_limpio[~mask_sku_na]
+    
+    # =======================================================================
+    # 3. DETECCIÓN Y MANEJO DE OUTLIERS DE ENTREGA (999 DÍAS, >100 DÍAS)
+    # =======================================================================
+    if "Tiempo_Entrega_Real" in df_limpio.columns:
+        # Convertir a numérico
+        df_limpio["Tiempo_Entrega_Real"] = pd.to_numeric(
+            df_limpio["Tiempo_Entrega_Real"], 
+            errors="coerce"
+        )
+        
+        # Calcular P95 (percentil 95) para detectar outliers
+        p95_entrega = df_limpio["Tiempo_Entrega_Real"].quantile(0.95)
+        umbral_outlier = p95_entrega * 1.2  # 20% por encima del P95
+        
+        # Marcar entregas extremas (pero no eliminar aún)
+        mask_outlier_entrega = df_limpio["Tiempo_Entrega_Real"] > umbral_outlier
+        df_limpio["Entrega_Outlier"] = mask_outlier_entrega
+        
+        # Eliminar SOLO si > 999 días (claramente error)
+        mask_entrega_extrema = df_limpio["Tiempo_Entrega_Real"] > 999
+        df_limpio = df_limpio[~mask_entrega_extrema]
+        
+        # Eliminar si > 120 días Y tiene marca de SKU fantasma (combinación sospechosa)
+        if "SKU_Fantasma" in df_limpio.columns:
+            mask_sospechosa = (df_limpio["Tiempo_Entrega_Real"] > 120) & (df_limpio["SKU_Fantasma"] == True)
+            df_limpio = df_limpio[~mask_sospechosa]
+    
+    # =======================================================================
+    # 4. LIMPIAR ANOMALÍAS DE CANTIDAD Y COSTO
+    # =======================================================================
+    # Eliminar filas con cantidad negativa Y costo envío NaN
     if "Cantidad_Vendida" in df_limpio.columns and "Costo_Envio" in df_limpio.columns:
-        mask1 = (df_limpio["Cantidad_Vendida"] < 0) & (df_limpio["Costo_Envio"].isna())
+        mask1 = (pd.to_numeric(df_limpio["Cantidad_Vendida"], errors="coerce") < 0) & (df_limpio["Costo_Envio"].isna())
         df_limpio = df_limpio[~mask1]
     
-    # 3. Eliminar filas con cantidad negativa Y tiempo entrega > 100 días
-    #    (anomalía: cantidad inconsistente + entrega extremadamente atrasada)
+    # Eliminar cantidad negativa Y tiempo entrega > 100 días
     if "Cantidad_Vendida" in df_limpio.columns and "Tiempo_Entrega_Real" in df_limpio.columns:
-        mask2 = (df_limpio["Cantidad_Vendida"] < 0) & (df_limpio["Tiempo_Entrega_Real"] > 100)
+        mask2 = (pd.to_numeric(df_limpio["Cantidad_Vendida"], errors="coerce") < 0) & (df_limpio["Tiempo_Entrega_Real"] > 100)
         df_limpio = df_limpio[~mask2]
     
-    # 4. Eliminar cantidades negativas RESIDUALES (cualquier cantidad < 0 que no haya sido capturada)
+    # Eliminar cantidades negativas residuales
     if "Cantidad_Vendida" in df_limpio.columns:
-        mask_qty_neg = df_limpio["Cantidad_Vendida"] < 0
+        mask_qty_neg = pd.to_numeric(df_limpio["Cantidad_Vendida"], errors="coerce") < 0
         df_limpio = df_limpio[~mask_qty_neg]
     
-    # 5. Filtrar transacciones con fecha FUTURA (no deben existir)
+    # =======================================================================
+    # 5. FILTRAR TRANSACCIONES CON FECHA FUTURA
+    # =======================================================================
     if "Fecha_Venta" in df_limpio.columns:
-        df_limpio = df_limpio[df_limpio["Fecha_Venta"] <= pd.Timestamp.now()]
+        mask_futura = df_limpio["Fecha_Venta"] > pd.Timestamp.now()
+        df_limpio = df_limpio[~mask_futura]
     
     filas_eliminadas = filas_originales - len(df_limpio)
     return df, df_limpio, int(filas_eliminadas)
@@ -657,6 +720,70 @@ def run_healthcheck(df_raw, required_cols=None, dataset_name=None):
         
         hc["feedback_validation"]["nps_issues"] = nps_issues if nps_issues else ["✓ NPS válido y normalizado"]
 
+    # VALIDACIONES ESPECIALIZADAS PARA TRANSACCIONES LOGÍSTICAS
+    hc["transacciones_validation"] = {}
+    if dataset_name == "Transacciones Logísticas":
+        # A. INTEGRIDAD REFERENCIAL (SKU FANTASMA)
+        referential_issues = []
+        if "SKU_Fantasma" in df_raw.columns:
+            sku_fantasma = (df_raw["SKU_Fantasma"] == True).sum()
+            if sku_fantasma > 0:
+                referential_issues.append(f"SKU fantasma (no en inventario): {sku_fantasma} ({(sku_fantasma/len(df_raw)*100):.1f}%)")
+        
+        if "SKU_ID" in df_raw.columns:
+            sku_na = df_raw["SKU_ID"].isna().sum()
+            if sku_na > 0:
+                referential_issues.append(f"SKU con NaN: {sku_na} ({(sku_na/len(df_raw)*100):.1f}%)")
+        
+        hc["transacciones_validation"]["referential_issues"] = referential_issues if referential_issues else ["✓ Integridad referencial verificada"]
+        
+        # B. NORMALIZACIÓN DE FECHAS
+        date_format_issues = []
+        fecha_cols = [col for col in df_raw.columns if "fecha" in col.lower()]
+        for col in fecha_cols:
+            if col in df_raw.columns:
+                # Contar NaT después de parsing
+                nat_count = df_raw[col].isna().sum()
+                if nat_count > 0:
+                    date_format_issues.append(f"{col} con NaT después de parsing: {nat_count} ({(nat_count/len(df_raw)*100):.1f}%)")
+        
+        hc["transacciones_validation"]["date_format_issues"] = date_format_issues if date_format_issues else ["✓ Fechas normalizadas correctamente"]
+        
+        # C. OUTLIERS DE TIEMPO DE ENTREGA (999 días, extremos)
+        delivery_issues = []
+        if "Tiempo_Entrega_Real" in df_raw.columns:
+            try:
+                entrega = pd.to_numeric(df_raw["Tiempo_Entrega_Real"], errors="coerce")
+                
+                # Outliers > 999 días
+                entrega_999 = (entrega > 999).sum()
+                if entrega_999 > 0:
+                    delivery_issues.append(f"Outliers extremos (>999 días): {entrega_999} ({(entrega_999/len(df_raw)*100):.1f}%)")
+                
+                # Cálculo de P95 para detectar sospechosos
+                p95 = entrega.quantile(0.95)
+                umbral = p95 * 1.2
+                
+                # Marcar outliers
+                if "Entrega_Outlier" in df_raw.columns:
+                    outlier_count = (df_raw["Entrega_Outlier"] == True).sum()
+                    if outlier_count > 0:
+                        delivery_issues.append(f"Outliers sospechosos (>P95 * 1.2): {outlier_count} ({(outlier_count/len(df_raw)*100):.1f}%) [umbral: {umbral:.0f} días]")
+                
+                # Entregas > 100 días
+                entrega_100 = (entrega > 100).sum()
+                if entrega_100 > 0:
+                    delivery_issues.append(f"Entregas retrasadas (>100 días): {entrega_100} ({(entrega_100/len(df_raw)*100):.1f}%)")
+                
+                # Estadísticas
+                entrega_valida = entrega[(entrega >= 0) & (entrega <= 999)]
+                if len(entrega_valida) > 0:
+                    delivery_issues.append(f"Rango válido: {entrega_valida.min():.0f} - {entrega_valida.max():.0f} días (P95: {p95:.0f})")
+            except Exception as e:
+                delivery_issues.append(f"Error en análisis de entregas: {str(e)}")
+        
+        hc["transacciones_validation"]["delivery_issues"] = delivery_issues if delivery_issues else ["✓ Entregas dentro de rango normal"]
+
     # Simple suggestions
     suggestions = []
     if hc["duplicates"] > 0:
@@ -686,6 +813,16 @@ def run_healthcheck(df_raw, required_cols=None, dataset_name=None):
             suggestions.append("⚠️ Edades imposibles o faltantes detectadas")
         if hc["feedback_validation"].get("nps_issues") and any("NaN" in s or "no estándar" in s for s in hc["feedback_validation"]["nps_issues"]):
             suggestions.append("⚠️ NPS requiere normalización o tiene valores faltantes")
+    
+    # Añadir sugerencias de transacciones
+    if dataset_name == "Transacciones Logísticas":
+        if hc["transacciones_validation"].get("referential_issues") and any("fantasma" in s or "NaN" in s for s in hc["transacciones_validation"]["referential_issues"]):
+            suggestions.append("⚠️ SKU fantasma detectado: transacciones sin respaldo en inventario")
+        if hc["transacciones_validation"].get("date_format_issues") and any("NaT" in s for s in hc["transacciones_validation"]["date_format_issues"]):
+            suggestions.append("⚠️ Errores en normalización de fechas: formatos inconsistentes detectados")
+        if hc["transacciones_validation"].get("delivery_issues") and any("999" in s or "retrasadas" in s for s in hc["transacciones_validation"]["delivery_issues"]):
+            suggestions.append("⚠️ Outliers de tiempo de entrega detectados (hasta 999 días o extremadamente retrasados)")
+
     
     hc["suggestions"] = suggestions
 
@@ -723,6 +860,27 @@ def run_healthcheck(df_raw, required_cols=None, dataset_name=None):
                 if "NaN" in issue:
                     score -= 15  # NPS faltante es grave
     
+    # Penalización adicional para transacciones con problemas críticos
+    if dataset_name == "Transacciones Logísticas":
+        if hc["transacciones_validation"].get("referential_issues"):
+            for issue in hc["transacciones_validation"]["referential_issues"]:
+                if "fantasma" in issue:
+                    score -= 30  # SKU fantasma es crítico (impacto financiero alto)
+                elif "NaN" in issue:
+                    score -= 15
+        
+        if hc["transacciones_validation"].get("delivery_issues"):
+            for issue in hc["transacciones_validation"]["delivery_issues"]:
+                if "999" in issue:
+                    score -= 20  # Outliers extremos son graves
+                elif "retrasadas" in issue:
+                    score -= 10
+        
+        if hc["transacciones_validation"].get("date_format_issues"):
+            for issue in hc["transacciones_validation"]["date_format_issues"]:
+                if "NaT" in issue:
+                    score -= 15  # Errores de fecha son críticos en logística
+    
     score = max(0, round(score, 2))
     hc["health_score"] = score
 
@@ -731,12 +889,13 @@ def run_healthcheck(df_raw, required_cols=None, dataset_name=None):
 FILES_CONFIG = {
     "Feedback de Clientes": (feedback_file, cargar_feedback, ["Edad_Cliente", "Rating_Producto", "Satisfaccion_NPS"]),
     "Inventario Central": (inventario_file, cargar_inventario, ["SKU_ID", "Categoria", "Stock_Actual", "Punto_Reorden"]),
-    "Transacciones Logísticas": (transacciones_file, cargar_transacciones, None)
 }
 
 datasets = {}
 health_status = {}
 
+# Cargar inventario primero (necesario para validar transacciones)
+inventario_limpio = None
 for name, (file, loader, required_cols) in FILES_CONFIG.items():
     if not file:
         health_status[name] = "missing"
@@ -748,6 +907,21 @@ for name, (file, loader, required_cols) in FILES_CONFIG.items():
 
     datasets[name] = {"raw": df_raw, "clean": df_clean, "health": health_clean}
     health_status[name] = health_clean["status"]
+    
+    # Guardar inventario limpio para validar transacciones
+    if name == "Inventario Central":
+        inventario_limpio = df_clean
+
+# Cargar transacciones (con validación de integridad referencial contra inventario)
+if transacciones_file:
+    df_raw_trans, df_clean_trans, filas_eliminadas_trans = cargar_transacciones(transacciones_file, inventario_limpio)
+    health_clean_trans = run_healthcheck(df_clean_trans, None, dataset_name="Transacciones Logísticas")
+    health_clean_trans["filas_eliminadas"] = filas_eliminadas_trans
+    
+    datasets["Transacciones Logísticas"] = {"raw": df_raw_trans, "clean": df_clean_trans, "health": health_clean_trans}
+    health_status["Transacciones Logísticas"] = health_clean_trans["status"]
+else:
+    health_status["Transacciones Logísticas"] = "missing"
 
 # =============================================================================
 # VISUALIZACIÓN DEL HEALTHCHECK (PROFUNDO)
@@ -912,6 +1086,30 @@ for name in datasets_disponibles:
                         st.success(issue)
                     else:
                         st.warning(issue)
+        
+        # VALIDACIONES ESPECIALIZADAS DE TRANSACCIONES LOGÍSTICAS
+        if name == "Transacciones Logísticas" and hc_clean.get("transacciones_validation"):
+            with st.expander("🔍 Validaciones Especializadas de Transacciones Logísticas"):
+                st.markdown("#### A. Integridad Referencial (SKU Fantasma)")
+                for issue in hc_clean["transacciones_validation"].get("referential_issues", []):
+                    if "✓" in issue:
+                        st.success(issue)
+                    else:
+                        st.error(issue)
+                
+                st.markdown("#### B. Normalización de Formatos de Fecha")
+                for issue in hc_clean["transacciones_validation"].get("date_format_issues", []):
+                    if "✓" in issue:
+                        st.success(issue)
+                    else:
+                        st.error(issue)
+                
+                st.markdown("#### C. Outliers de Tiempo de Entrega (999 días, extremos)")
+                for issue in hc_clean["transacciones_validation"].get("delivery_issues", []):
+                    if "✓" in issue or "Rango válido" in issue:
+                        st.success(issue)
+                    else:
+                        st.error(issue)
 
 st.markdown("---")
 
