@@ -1682,22 +1682,69 @@ st.dataframe(
 
 # ---------- 2. Crisis Logística ----------
 st.subheader("2️⃣ Crisis Logística y Cuellos de Botella")
-log_merge = merged.merge(fb_sku[["Transaccion_ID","Satisfaccion_NPS"]], on="Transaccion_ID", how="left")
+
+log_merge = merged.merge(
+    fb_sku[["Transaccion_ID","Satisfaccion_NPS"]],
+    on="Transaccion_ID",
+    how="left"
+)
+
 log_merge["Tiempo_Entrega_Real"] = log_merge["Tiempo_Entrega_Real"].fillna(0)
 log_merge["Satisfaccion_NPS"] = log_merge["Satisfaccion_NPS"].fillna(0)
 
-corr_ciudad = log_merge.groupby("Ciudad_Destino")[["Tiempo_Entrega_Real","Satisfaccion_NPS"]].corr().iloc[0::2,-1]
-corr_ciudad = corr_ciudad.reset_index().rename(columns={"Satisfaccion_NPS":"Corr_Entrega_NPS"})
+corr_ciudad = (
+    log_merge
+    .groupby("Ciudad_Destino")[["Tiempo_Entrega_Real","Satisfaccion_NPS"]]
+    .corr()
+    .iloc[0::2, -1]
+    .reset_index()
+    .rename(columns={"Satisfaccion_NPS": "Corr_Entrega_NPS"})
+)
+
 st.markdown("**Correlación Tiempo de Entrega vs NPS por Ciudad**")
 st.dataframe(corr_ciudad.sort_values("Corr_Entrega_NPS"))
 
+# ---------------------------
+# GRÁFICA
+# ---------------------------
 fig, ax = plt.subplots(figsize=(8,4))
 top_ciudades = corr_ciudad.sort_values("Corr_Entrega_NPS").head(10)
-ax.barh(top_ciudades["Ciudad_Destino"], top_ciudades["Corr_Entrega_NPS"], color="orange")
+
+ax.barh(
+    top_ciudades["Ciudad_Destino"],
+    top_ciudades["Corr_Entrega_NPS"],
+    color="orange"
+)
 ax.set_xlabel("Correlación")
 ax.set_title("Top 10 Ciudades con mayor impacto en satisfacción")
+
 st.pyplot(fig)
 
+# ⬇️ DESCARGA DE LA GRÁFICA
+buffer = io.BytesIO()
+fig.savefig(buffer, format="png", dpi=200, bbox_inches="tight")
+buffer.seek(0)
+
+st.download_button(
+    label="📥 Descargar gráfica: Impacto logístico por ciudad",
+    data=buffer,
+    file_name="impacto_logistico_nps_por_ciudad.png",
+    mime="image/png"
+)
+
+# ---------------------------
+# (OPCIONAL) DESCARGA DE TABLA
+# ---------------------------
+csv_buffer = io.BytesIO()
+corr_ciudad.to_csv(csv_buffer, index=False)
+csv_buffer.seek(0)
+
+st.download_button(
+    label="📥 Descargar tabla de correlaciones (CSV)",
+    data=csv_buffer,
+    file_name="correlacion_entrega_nps_por_ciudad.csv",
+    mime="text/csv"
+)
 # ---------- 3. Venta Invisible ----------
 st.subheader("3️⃣ Análisis de la Venta Invisible")
 ingreso_total = merged["Ingreso"].sum()
