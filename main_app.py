@@ -444,32 +444,50 @@ def cargar_inventario(file):
                 details=f"Conversión de {filas_antes_fecha} valores a datetime64[ns]. NaT asignado a valores inválidos."
             )
     
-    # PASO 2: Lead_Time_Dias validación [0, 365]
+    # PASO 2: Lead_Time_Dias validación mediante IQR (Rango Intercuartil)
     if "Lead_Time_Dias" in df_limpio.columns:
         df_limpio["Lead_Time_Dias"] = pd.to_numeric(df_limpio["Lead_Time_Dias"], errors="coerce")
         
         filas_antes_lead = len(df_limpio)
-        mask_lead_inválido = (df_limpio["Lead_Time_Dias"] < 0) | (df_limpio["Lead_Time_Dias"] > 365)
-        df_limpio.loc[mask_lead_inválido, "Lead_Time_Dias"] = None
+        
+        # Calcular IQR
+        lead_valid = df_limpio["Lead_Time_Dias"].dropna()
+        if len(lead_valid) > 0:
+            Q1_lead = lead_valid.quantile(0.25)
+            Q3_lead = lead_valid.quantile(0.75)
+            IQR_lead = Q3_lead - Q1_lead
+            
+            # Límites: [Q1 - 1.5×IQR, Q3 + 1.5×IQR]
+            lower_bound_lead = Q1_lead - 1.5 * IQR_lead
+            upper_bound_lead = Q3_lead + 1.5 * IQR_lead
+            
+            # Marcar outliers (no eliminar)
+            mask_lead_outlier = (df_limpio["Lead_Time_Dias"] < lower_bound_lead) | (df_limpio["Lead_Time_Dias"] > upper_bound_lead)
+            df_limpio["Lead_Time_Outlier"] = mask_lead_outlier
+            
+            # Eliminar solo Lead_Time negativo (imposible)
+            mask_lead_negativo = df_limpio["Lead_Time_Dias"] < 0
+            df_limpio = df_limpio[~mask_lead_negativo]
+        
         filas_despues_lead = len(df_limpio)
         
         logger.log_step(
-            step_name="Validar Lead_Time_Dias en rango [0, 365] días",
+            step_name="Validar Lead_Time_Dias mediante IQR (Rango Intercuartil)",
             rows_before=filas_antes_lead,
             rows_after=filas_despues_lead,
-            reason="Lead_Time es días de resurtimiento. Rango válido: 0-365 días. < 0 (imposible) o > 365 (anómalo).",
-            method="Máscara: (Lead_Time < 0) OR (Lead_Time > 365), reemplazo con None",
-            details=f"Validados {filas_antes_lead} valores. {mask_lead_inválido.sum()} fuera de rango marcados como NaN."
+            reason="Lead_Time es días de resurtimiento. Outliers detectados mediante IQR. Valores negativos son imposibles (eliminados). Outliers marcados para auditoría.",
+            method=f"IQR: [Q1 - 1.5×IQR, Q3 + 1.5×IQR] = [{lower_bound_lead:.1f}, {upper_bound_lead:.1f}]",
+            details=f"Q1={Q1_lead:.1f}, Q3={Q3_lead:.1f}, IQR={IQR_lead:.1f}. {mask_lead_outlier.sum()} outliers marcados (preservados). {filas_antes_lead - filas_despues_lead} negativos eliminados."
         )
     
     # =================================================================
-    # B. VALIDACIÓN DE COSTOS (Rango $0.01 - $850k)
+    # B. VALIDACIÓN DE COSTOS (Detección de Outliers mediante IQR)
     # =================================================================
     
     if "Costo_Unitario_USD" in df_limpio.columns:
         df_limpio["Costo_Unitario_USD"] = pd.to_numeric(df_limpio["Costo_Unitario_USD"], errors="coerce")
         
-        # PASO 3: Eliminar costos <= $0.00
+        # PASO 3: Eliminar costos <= $0.00 (Restricción Contable Fundamental)
         filas_antes_costo_cero = len(df_limpio)
         mask_costo_cero = df_limpio["Costo_Unitario_USD"] <= 0
         df_limpio = df_limpio[~mask_costo_cero]
@@ -484,21 +502,36 @@ def cargar_inventario(file):
             details=f"{filas_antes_costo_cero - filas_despues_costo_cero} productos con costo inválido eliminados."
         )
         
-        # PASO 4: Eliminar costos > $850k (outliers extremos)
-        filas_antes_costo_ext = len(df_limpio)
-        mask_costo_extremo = df_limpio["Costo_Unitario_USD"] > 850000
-        costo_max = df_limpio.loc[mask_costo_extremo, "Costo_Unitario_USD"].max() if mask_costo_extremo.sum() > 0 else 0
-        df_limpio = df_limpio[~mask_costo_extremo]
-        filas_despues_costo_ext = len(df_limpio)
+        # PASO 4: Detectar Outliers Extremos mediante IQR
+        filas_antes_costo_iqr = len(df_limpio)
         
-        logger.log_step(
-            step_name="Eliminar Costos > $850,000",
-            rows_before=filas_antes_costo_ext,
-            rows_after=filas_despues_costo_ext,
-            reason="Rango observado de costos válidos: $0.01 - $850,000. Valores > $850k = outliers extremos (probable error decimal).",
-            method="Máscara booleana: (Costo_Unitario > 850000), filtrado con operador ~",
-            details=f"{filas_antes_costo_ext - filas_despues_costo_ext} outliers extremos eliminados (max: ${costo_max:,.0f})."
-        )
+        # Calcular IQR
+        costo_valid = df_limpio["Costo_Unitario_USD"].dropna()
+        if len(costo_valid) > 0:
+            Q1_costo = costo_valid.quantile(0.25)
+            Q3_costo = costo_valid.quantile(0.75)
+            IQR_costo = Q3_costo - Q1_costo
+            
+            # Límites: [Q1 - 1.5×IQR, Q3 + 1.5×IQR]
+            lower_bound_costo = Q1_costo - 1.5 * IQR_costo
+            upper_bound_costo = Q3_costo + 1.5 * IQR_costo
+            
+            # Marcar outliers (no eliminar, preservar para auditoría)
+            mask_costo_outlier = (df_limpio["Costo_Unitario_USD"] < lower_bound_costo) | (df_limpio["Costo_Unitario_USD"] > upper_bound_costo)
+            df_limpio["Costo_Outlier"] = mask_costo_outlier
+            
+            filas_despues_costo_iqr = len(df_limpio)
+            
+            logger.log_step(
+                step_name="Detectar Outliers de Costos mediante IQR (Rango Intercuartil)",
+                rows_before=filas_antes_costo_iqr,
+                rows_after=filas_despues_costo_iqr,
+                reason="Costos extremos detectados mediante IQR. Outliers preservados (no eliminados) para auditoría y análisis de riesgo.",
+                method=f"IQR: [Q1 - 1.5×IQR, Q3 + 1.5×IQR] = [${lower_bound_costo:,.2f}, ${upper_bound_costo:,.2f}]",
+                details=f"Q1=${Q1_costo:,.2f}, Q3=${Q3_costo:,.2f}, IQR=${IQR_costo:,.2f}. {mask_costo_outlier.sum()} outliers detectados (ejemplo: $850k excede ${upper_bound_costo:,.2f})."
+            )
+        else:
+            df_limpio["Costo_Outlier"] = False
     
     # =================================================================
     # C. VALIDACIÓN DE STOCK (Stock < 0: Lógica Especial)
