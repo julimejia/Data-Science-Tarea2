@@ -1747,18 +1747,60 @@ st.download_button(
 )
 # ---------- 3. Venta Invisible ----------
 st.subheader("3️⃣ Análisis de la Venta Invisible")
+
 ingreso_total = merged["Ingreso"].sum()
-ingreso_fantasma = merged.loc[merged["sku_status"]=="FANTASMA","Ingreso"].sum()
+ingreso_fantasma = merged.loc[merged["sku_status"] == "FANTASMA", "Ingreso"].sum()
+
 st.metric("Ingreso total (USD)", f"{ingreso_total:,.0f}")
 st.metric("Ingreso en riesgo (USD)", f"{ingreso_fantasma:,.0f}")
-st.metric("% Ingreso en riesgo", f"{(ingreso_fantasma/ingreso_total)*100:.2f}%")
+st.metric(
+    "% Ingreso en riesgo",
+    f"{(ingreso_fantasma / ingreso_total) * 100:.2f}%"
+    if ingreso_total > 0 else "0.00%"
+)
 
+# ---------------------------
+# GRÁFICA
+# ---------------------------
 fig, ax = plt.subplots(figsize=(6,4))
+
 ingresos_tipo = merged.groupby("sku_status")["Ingreso"].sum()
-ax.bar(ingresos_tipo.index, ingresos_tipo.values, color=["red","green"])
+
+ax.bar(
+    ingresos_tipo.index,
+    ingresos_tipo.values,
+    color=["red", "green"]
+)
 ax.set_ylabel("Ingreso (USD)")
 ax.set_title("Impacto financiero por tipo de SKU")
+
 st.pyplot(fig)
+
+# ⬇️ DESCARGA DE LA GRÁFICA
+buffer = io.BytesIO()
+fig.savefig(buffer, format="png", dpi=200, bbox_inches="tight")
+buffer.seek(0)
+
+st.download_button(
+    label="📥 Descargar gráfica: Venta Invisible por SKU",
+    data=buffer,
+    file_name="venta_invisible_ingreso_por_sku.png",
+    mime="image/png"
+)
+
+# ---------------------------
+# (OPCIONAL) DESCARGA DE DATOS
+# ---------------------------
+csv_buffer = io.BytesIO()
+ingresos_tipo.reset_index().to_csv(csv_buffer, index=False)
+csv_buffer.seek(0)
+
+st.download_button(
+    label="📥 Descargar resumen financiero (CSV)",
+    data=csv_buffer,
+    file_name="resumen_ingreso_por_tipo_sku.csv",
+    mime="text/csv"
+)
 
 
 # ---------- 4️⃣ Diagnóstico de Fidelidad ----------
