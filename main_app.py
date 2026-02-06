@@ -1638,19 +1638,47 @@ if "merged" not in locals():
 
 # ---------- 1. Fuga de Capital ----------
 st.subheader("1️⃣ Fuga de Capital y Rentabilidad")
+
 negativos = merged[merged["Margen_Utilidad"] < 0].copy()
+
 st.metric("SKUs con margen negativo", len(negativos))
-st.metric("Ingreso en riesgo (USD)", f"{negativos['Ingreso'].sum():,.0f}")
-st.metric("% Ingreso en riesgo", f"{(negativos['Ingreso'].sum()/merged['Ingreso'].sum())*100:.2f}%")
+st.metric(
+    "Ingreso en riesgo (USD)",
+    f"{negativos['Ingreso'].sum():,.0f}"
+)
+st.metric(
+    "% Ingreso en riesgo",
+    f"{(negativos['Ingreso'].sum()/merged['Ingreso'].sum())*100:.2f}%"
+)
 
 fig, ax = plt.subplots(figsize=(6,4))
-margen_counts = merged["Margen_Utilidad"].apply(lambda x: "Negativo" if x<0 else "Positivo").value_counts()
+margen_counts = merged["Margen_Utilidad"].apply(
+    lambda x: "Negativo" if x < 0 else "Positivo"
+).value_counts()
+
 ax.bar(margen_counts.index, margen_counts.values, color=["red","green"])
 ax.set_title("Distribución de Margen de Utilidad")
 ax.set_ylabel("Cantidad de Transacciones")
+
 st.pyplot(fig)
 
-st.dataframe(negativos[["SKU_ID","Cantidad_Vendida","Ingreso","Costo_Total","Margen_Utilidad"]])
+# ⬇️ DESCARGA DIRECTA DE LA GRÁFICA
+buffer = io.BytesIO()
+fig.savefig(buffer, format="png", dpi=200, bbox_inches="tight")
+buffer.seek(0)
+
+st.download_button(
+    label="📥 Descargar gráfica: Distribución de Margen",
+    data=buffer,
+    file_name="distribucion_margen_utilidad.png",
+    mime="image/png"
+)
+
+st.dataframe(
+    negativos[
+        ["SKU_ID","Cantidad_Vendida","Ingreso","Costo_Total","Margen_Utilidad"]
+    ]
+)
 
 # ---------- 2. Crisis Logística ----------
 st.subheader("2️⃣ Crisis Logística y Cuellos de Botella")
