@@ -1829,7 +1829,7 @@ df_fidelidad = inv.merge(
     how="left"
 )
 
-# Filtro de riesgo: stock alto (percentil 75) y NPS bajo (percentil 25)
+# Filtro de riesgo: stock alto (p75) y NPS bajo (p25)
 stock_p75 = df_fidelidad["Stock_Actual"].quantile(0.75)
 nps_p25 = df_fidelidad["Satisfaccion_NPS"].quantile(0.25)
 
@@ -1838,21 +1838,37 @@ fidelidad_riesgo = df_fidelidad[
     (df_fidelidad["Satisfaccion_NPS"] < nps_p25)
 ].copy()
 
-# Agrupar por categoría para dashboard
+# Agrupar por categoría
 categoria_summary = fidelidad_riesgo.groupby("Categoria").agg(
     Cantidad_SKU=("SKU_ID","count"),
     Stock_Total=("Stock_Actual","sum"),
     NPS_Promedio=("Satisfaccion_NPS","mean")
 ).reset_index()
 
-categoria_summary = categoria_summary.sort_values(["Cantidad_SKU","NPS_Promedio"], ascending=[False,True])
+categoria_summary = categoria_summary.sort_values(
+    ["Cantidad_SKU","NPS_Promedio"],
+    ascending=[False, True]
+)
 
-# Mostrar tabla
+# ---------------------------
+# Tabla categorías críticas + descarga
+# ---------------------------
 st.subheader("📋 Categorías Críticas")
 st.dataframe(categoria_summary, use_container_width=True, hide_index=True)
 
-# Gráfico: Stock vs NPS
+csv_categoria = categoria_summary.to_csv(index=False)
+st.download_button(
+    label="📥 Descargar categorías críticas (CSV)",
+    data=csv_categoria,
+    file_name="categorias_criticas_stock_alto_nps_bajo.csv",
+    mime="text/csv"
+)
+
+# ---------------------------
+# Gráfico Stock vs NPS
+# ---------------------------
 st.subheader("📍 Matriz de Riesgo: Stock vs Satisfacción")
+
 fig, ax = plt.subplots(figsize=(10,6))
 
 # Todos los SKUs
@@ -1861,8 +1877,8 @@ ax.scatter(
     df_fidelidad["Satisfaccion_NPS"],
     alpha=0.5,
     s=50,
-    color='blue',
-    label='Todos los SKUs'
+    color="blue",
+    label="Todos los SKUs"
 )
 
 # SKUs en riesgo
@@ -1871,14 +1887,14 @@ if not fidelidad_riesgo.empty:
         fidelidad_riesgo["Stock_Actual"],
         fidelidad_riesgo["Satisfaccion_NPS"],
         s=100,
-        color='red',
-        label=f'En Riesgo ({len(fidelidad_riesgo)})',
+        color="red",
+        label=f"En Riesgo ({len(fidelidad_riesgo)})",
         zorder=5
     )
 
 # Líneas de referencia
-ax.axhline(y=nps_p25, color='orange', linestyle='--', label=f'NPS Bajo ({nps_p25:.0f})')
-ax.axvline(x=stock_p75, color='green', linestyle='--', label=f'Stock Alto ({stock_p75:.0f})')
+ax.axhline(y=nps_p25, color="orange", linestyle="--", label=f"NPS Bajo ({nps_p25:.0f})")
+ax.axvline(x=stock_p75, color="green", linestyle="--", label=f"Stock Alto ({stock_p75:.0f})")
 
 ax.set_xlabel("Stock Actual")
 ax.set_ylabel("Satisfacción NPS")
@@ -1888,40 +1904,51 @@ ax.grid(True, alpha=0.3)
 
 st.pyplot(fig)
 
-# Recomendaciones rápidas
+# Descarga de la gráfica
+buffer = io.BytesIO()
+fig.savefig(buffer, format="png", dpi=200, bbox_inches="tight")
+buffer.seek(0)
+
+st.download_button(
+    label="📥 Descargar gráfica Stock vs NPS",
+    data=buffer,
+    file_name="matriz_riesgo_stock_vs_nps.png",
+    mime="image/png"
+)
+
+# ---------------------------
+# Análisis rápido
+# ---------------------------
 st.subheader("🎯 Análisis Rápido")
+
 if not fidelidad_riesgo.empty:
     st.success(f"**Se encontraron {len(fidelidad_riesgo)} SKUs en riesgo**")
     st.write("**Categorías más afectadas:**")
-    for idx, row in categoria_summary.head(3).iterrows():
-        st.write(f"- **{row['Categoria'].capitalize()}**: {row['Cantidad_SKU']} SKUs, NPS: {row['NPS_Promedio']:.0f}")
+    for _, row in categoria_summary.head(3).iterrows():
+        st.write(
+            f"- **{row['Categoria'].capitalize()}**: "
+            f"{row['Cantidad_SKU']} SKUs, NPS: {row['NPS_Promedio']:.0f}"
+        )
 else:
     st.info("✅ No se encontraron SKUs con alto stock y baja satisfacción")
 
-# Botón de exportación
+# ---------------------------
+# Exportar SKUs en riesgo
+# ---------------------------
 if not fidelidad_riesgo.empty:
-    csv = fidelidad_riesgo[['SKU_ID','Categoria','Stock_Actual','Satisfaccion_NPS']].to_csv(index=False)
+    csv_riesgo = fidelidad_riesgo[
+        ["SKU_ID","Categoria","Stock_Actual","Satisfaccion_NPS"]
+    ].to_csv(index=False)
+
     st.download_button(
         label="📥 Exportar SKUs en Riesgo",
-        data=csv,
-        file_name="skus_riesgo.csv",
+        data=csv_riesgo,
+        file_name="skus_riesgo_stock_alto_nps_bajo.csv",
         mime="text/csv"
     )
 
-    st.info("Asegúrate de tener cargados los datasets de Inventario Central y Feedback de Clientes.") 
+    st.info("Asegúrate de tener cargados Inventario Central y Feedback de Clientes.")
 
-
-# Asegurarnos que los IDs estén limpios
-fb_sku["Transaccion_ID"] = fb_sku["Transaccion_ID"].astype(str).str.strip()
-trx["Transaccion_ID"] = trx["Transaccion_ID"].astype(str).str.strip()
-trx["Bodega_ID"] = trx["Bodega_ID"].astype(str).str.strip() if "Bodega_ID" in trx.columns else "UNKNOWN"
-
-# Merge Feedback + Transacciones para obtener SKU_ID y Bodega
-fb_trx = fb_sku.merge(
-    trx[["Transaccion_ID","SKU_ID","Bodega_ID"]], 
-    on="Transaccion_ID", 
-    how="left"
-)
 # ---------- 5 Relacion bodegas - satisfaccion ----------
 
 inv = datasets["Inventario Central"]["clean"].copy()
