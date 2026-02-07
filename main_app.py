@@ -1556,76 +1556,76 @@ if "Inventario Central" in datasets_disponibles and "Transacciones Logísticas" 
     merged["Health_Score"] = merged["Health_Score"].clip(0,100)
 
     # ---------------------------
-# ---------------------------
-# 5. Dashboard visualizaciones
-# ---------------------------
-st.subheader("📦 Visibilidad de SKUs Fantasma")
-resumen = merged["sku_status"].value_counts().reset_index()
-resumen.columns = ["Estado SKU","Cantidad"]
-
-col1, col2 = st.columns(2)
-col1.metric("Transacciones Totales", len(merged))
-col2.metric(
-    "SKUs Fantasma",
-    resumen.loc[resumen["Estado SKU"]=="FANTASMA","Cantidad"].sum()
-)
-
-# ----------- Grafica 1 -----------
-fig1, ax1 = plt.subplots()
-ax1.bar(resumen["Estado SKU"], resumen["Cantidad"], color=["green","red"])
-ax1.set_ylabel("Número de Transacciones")
-ax1.set_title("Distribución SKUs Fantasma vs Válidos")
-st.pyplot(fig1)
-
-# descarga grafica 1
-buffer1 = io.BytesIO()
-fig1.savefig(buffer1, format="png", dpi=200, bbox_inches="tight")
-buffer1.seek(0)
-
-st.download_button(
-    label="📥 Descargar gráfica SKUs Fantasma",
-    data=buffer1,
-    file_name="distribucion_skus_fantasma.png",
-    mime="image/png"
-)
-
-# ----------- Grafica 2 -----------
-st.subheader("💰 Impacto Financiero y Margen")
-fig2, ax2 = plt.subplots()
-ax2.scatter(
-    merged["Margen_Pct"],
-    merged["Ingreso"],
-    c=merged["Health_Score"],
-    cmap="RdYlGn",
-    alpha=0.7
-)
-ax2.set_xlabel("Margen %")
-ax2.set_ylabel("Ingreso USD")
-ax2.set_title("Margen vs Ingreso (color = Health Score)")
-st.pyplot(fig2)
-
-# descarga grafica 2
-buffer2 = io.BytesIO()
-fig2.savefig(buffer2, format="png", dpi=200, bbox_inches="tight")
-buffer2.seek(0)
-
-st.download_button(
-    label="📥 Descargar gráfica Margen vs Ingreso",
-    data=buffer2,
-    file_name="margen_vs_ingreso.png",
-    mime="image/png"
-)
-
-# ----------- Tabla -----------
-st.subheader("🧠 Riesgo Operativo")
-st.dataframe(
-    merged[[
-        "Transaccion_ID","SKU_ID","sku_status","Ingreso","Costo_Total",
-        "Margen_Utilidad","Margen_Pct","Brecha_Entrega_Dias",
-        "Ticket_Soporte_Abierto","Riesgo_Operativo","Health_Score"
-    ]].head(50),
-    use_container_width=True
-)
+    # ---------------------------
+    # 5. Dashboard visualizaciones
+    # ---------------------------
+    st.subheader("📦 Visibilidad de SKUs Fantasma")
+    resumen = merged["sku_status"].value_counts().reset_index()
+    resumen.columns = ["Estado SKU","Cantidad"]
+    
+    col1, col2 = st.columns(2)
+    col1.metric("Transacciones Totales", len(merged))
+    col2.metric(
+        "SKUs Fantasma",
+        resumen.loc[resumen["Estado SKU"]=="FANTASMA","Cantidad"].sum()
+    )
+    
+    # ----------- Grafica 1 -----------
+    fig1, ax1 = plt.subplots()
+    ax1.bar(resumen["Estado SKU"], resumen["Cantidad"], color=["green","red"])
+    ax1.set_ylabel("Número de Transacciones")
+    ax1.set_title("Distribución SKUs Fantasma vs Válidos")
+    st.pyplot(fig1)
+    
+    # descarga grafica 1
+    buffer1 = io.BytesIO()
+    fig1.savefig(buffer1, format="png", dpi=200, bbox_inches="tight")
+    buffer1.seek(0)
+    
+    st.download_button(
+        label="📥 Descargar gráfica SKUs Fantasma",
+        data=buffer1,
+        file_name="distribucion_skus_fantasma.png",
+        mime="image/png"
+    )
+    
+    # ----------- Grafica 2 -----------
+    st.subheader("💰 Impacto Financiero y Margen")
+    fig2, ax2 = plt.subplots()
+    ax2.scatter(
+        merged["Margen_Pct"],
+        merged["Ingreso"],
+        c=merged["Health_Score"],
+        cmap="RdYlGn",
+        alpha=0.7
+    )
+    ax2.set_xlabel("Margen %")
+    ax2.set_ylabel("Ingreso USD")
+    ax2.set_title("Margen vs Ingreso (color = Health Score)")
+    st.pyplot(fig2)
+    
+    # descarga grafica 2
+    buffer2 = io.BytesIO()
+    fig2.savefig(buffer2, format="png", dpi=200, bbox_inches="tight")
+    buffer2.seek(0)
+    
+    st.download_button(
+        label="📥 Descargar gráfica Margen vs Ingreso",
+        data=buffer2,
+        file_name="margen_vs_ingreso.png",
+        mime="image/png"
+    )
+    
+    # ----------- Tabla -----------
+    st.subheader("🧠 Riesgo Operativo")
+    st.dataframe(
+        merged[[
+            "Transaccion_ID","SKU_ID","sku_status","Ingreso","Costo_Total",
+            "Margen_Utilidad","Margen_Pct","Brecha_Entrega_Dias",
+            "Ticket_Soporte_Abierto","Riesgo_Operativo","Health_Score"
+        ]].head(50),
+        use_container_width=True
+    )
 
     # ---------------------------
     # 6. Descarga CSV de variables derivadas
